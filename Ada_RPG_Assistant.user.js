@@ -1522,15 +1522,25 @@
   }
 
   function parseShopResponse(text) {
-    // Ada lists items like: "iron sword, wooden shield, leather armor"
-    // Also may contain "refreshes in X minutes" or "expires in X"
     const newItems = [];
-    // Try matching known shop DB items in the text
     const tl = text.toLowerCase();
-    for (const name of Object.keys(SHOP_DB)) {
-      if (tl.includes(name)) {
-        newItems.push(name);
+    // Sort DB keys longest first so "dragonsteel greatsword" matches before "steel greatsword"
+    const sortedNames = Object.keys(SHOP_DB).sort((a, b) => b.length - a.length);
+    // Track matched positions to prevent substring overlaps
+    const matched = new Set();
+    for (const name of sortedNames) {
+      const idx = tl.indexOf(name);
+      if (idx === -1) continue;
+      // Check it's not a substring of an already-matched longer name
+      let isSubstring = false;
+      for (const prev of matched) {
+        if (prev.includes(name)) { isSubstring = true; break; }
       }
+      if (isSubstring) continue;
+      // Verify word boundary: char before must be non-letter or start of string
+      if (idx > 0 && /[a-z]/.test(tl[idx - 1])) continue;
+      matched.add(name);
+      newItems.push(name);
     }
     if (newItems.length > 0) {
       ada.shopItems = newItems;
