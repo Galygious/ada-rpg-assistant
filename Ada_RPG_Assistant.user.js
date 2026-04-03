@@ -1001,15 +1001,27 @@
     const sender = (nameEl.textContent || nameEl.innerText || '').trim().toLowerCase();
     const msgEl = line.querySelector('[data-a-target="chat-message-text"]') ||
                   line.querySelector('.text-fragment');
-    // get full message text from the line (handles multiple fragments)
+    // get full message text from the line
+    // Include BOTH text-fragment AND mention-fragment spans to capture @mentions (player names)
     let msgText = '';
-    const fragments = line.querySelectorAll('[data-a-target="chat-message-text"], .text-fragment');
-    if (fragments.length > 0) {
-      msgText = Array.from(fragments).map(f => f.textContent || '').join('').trim();
+    const messageBody = line.querySelector('[data-a-target="chat-line-message-body"]');
+    if (messageBody) {
+      // Grab all child spans in order: text-fragment, mention-fragment, etc.
+      const allSpans = messageBody.querySelectorAll('.text-fragment, .mention-fragment, [data-a-target="chat-message-text"], [data-a-target="chat-message-mention"]');
+      if (allSpans.length > 0) {
+        msgText = Array.from(allSpans).map(f => f.textContent || '').join('').trim();
+      } else {
+        msgText = (messageBody.textContent || '').trim();
+      }
     } else {
-      // fallback: get text from message body
-      const body = line.querySelector('[class*="message"]');
-      if (body) msgText = (body.textContent || '').trim();
+      // fallback
+      const fragments = line.querySelectorAll('[data-a-target="chat-message-text"], .text-fragment, .mention-fragment');
+      if (fragments.length > 0) {
+        msgText = Array.from(fragments).map(f => f.textContent || '').join('').trim();
+      } else {
+        const body = line.querySelector('[class*="message"]');
+        if (body) msgText = (body.textContent || '').trim();
+      }
     }
     if (!sender || !msgText) return;
 
