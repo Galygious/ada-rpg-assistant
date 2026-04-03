@@ -1055,10 +1055,16 @@
     const t = text.trim();
     const tl = t.toLowerCase();
 
-    // Only parse gold from !g response when WE asked for it
+    // Only parse gold from !g response when WE asked for it AND it's OUR response
+    // Format: "galygious: 63912G, 28882P." or ": 63912G, 28882P." (blank name = us)
     if (ada.awaitingGold && /\d+\s*G/i.test(t)) {
-      tryParseGold(t);
-      ada.awaitingGold = false;
+      const isOurGold = !ada.playerName ||
+                        tl.includes(ada.playerName.toLowerCase() + ':') ||
+                        /^[^a-z]*:\s*\d/i.test(t); // blank name before colon
+      if (isOurGold) {
+        tryParseGold(t);
+        ada.awaitingGold = false;
+      }
     }
 
     // --- Quest announcement: "A quest is available" = no one started yet ---
@@ -1217,6 +1223,14 @@
     // No "HP" suffix. Colon + space between name and numbers.
     // Blank name (": 14/360") = your own character.
     if (/are injured|appears? healthy/i.test(t)) {
+      // Only process if it's OUR whohurt response
+      // Format: "galygious, you see ..." or ", you see ..." (blank name)
+      const isOurWhohurt = !ada.playerName ||
+                           tl.startsWith(ada.playerName.toLowerCase() + ',') ||
+                           tl.startsWith(ada.playerName.toLowerCase() + ' ') ||
+                           /^[,\s]*you see/i.test(t);
+      if (!isOurWhohurt) return; // someone else's response, skip
+
       ada.injuredParty = {}; // fresh data
       let foundPartyHp = false;
 
@@ -1338,10 +1352,14 @@
     }
 
     // --- Character response ---
-    // Only parse when we explicitly requested it via !char, to avoid
-    // capturing other players' character info
-    if (ada.awaitingChar && /You see|level \d+/i.test(t)) {
-      parseCharResponse(t);
+    // Only parse when we requested AND it's OUR char response
+    if (ada.awaitingChar && /You see/i.test(t)) {
+      const isOurChar = !ada.playerName ||
+                        tl.includes('you see ' + ada.playerName.toLowerCase()) ||
+                        /you see\s*,/i.test(t); // blank name: "You see , the level..."
+      if (isOurChar) {
+        parseCharResponse(t);
+      }
     }
 
     // --- Gold/plat response from !g ---
