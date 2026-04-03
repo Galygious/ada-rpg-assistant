@@ -1059,16 +1059,28 @@
     }
 
     // --- Boss spawn detection ---
-    // "opens the Boss Token Lvl35 some rustling is heard nearby and a Agile Ancient Behemoth appears!"
-    const bossSpawnM = /Boss Token Lvl(\d+).*?(?:and |a )(.+?)\s*appears?/i.exec(t);
+    // Format 1: "opens the Boss Token Lvl35 ... and a Agile Ancient Behemoth appears!"
+    // Format 2: "opens the Boss Token Lvl30 ... and Sleepy Avatar of Light appears!"
+    const bossSpawnM = /Boss Token Lvl(\d+).*?and\s+(?:a\s+)?(.+?)\s+appears/i.exec(t);
     if (bossSpawnM) {
+      const fullName = bossSpawnM[2].trim();
+      const level = parseInt(bossSpawnM[1]);
+
+      // Known boss modifiers — strip to get base name for DB grouping
+      const BOSS_MODIFIERS = /^(Agile|Sparkling|Agitated|Bristling|Bashful|Sleepy|Imposing|Shield bearing|Armored|Well-Dressed|Enraged|Mighty|Ancient|Swift|Cunning|Frenzied|Hulking|Shadowy|Venomous|Corrupted)\s+/i;
+      const modMatch = BOSS_MODIFIERS.exec(fullName);
+      const modifier = modMatch ? modMatch[1] : null;
+      const baseName = modMatch ? fullName.slice(modMatch[0].length) : fullName;
+
       ada.currentBoss = {
-        name: bossSpawnM[2].trim(),
-        level: parseInt(bossSpawnM[1]),
+        name: fullName,
+        baseName: baseName,
+        modifier: modifier,
+        level: level,
         dmgDealt: 0,
         startedAt: now(),
       };
-      log(`Boss spawned: ${ada.currentBoss.name} (Lvl ${ada.currentBoss.level})`);
+      log(`Boss spawned: ${fullName} [${modifier || 'no modifier'}] (Lvl ${level}, base: ${baseName})`);
     }
 
     // --- Quest start / combat detection ---
@@ -1102,8 +1114,8 @@
 
       // Record boss HP data if we tracked a boss fight
       if (ada.currentBoss && ada.currentBoss.dmgDealt > 0) {
-        recordBossHP(ada.currentBoss.level, ada.currentBoss.name, ada.currentBoss.dmgDealt);
-        log(`Boss defeated: ${ada.currentBoss.name} Lvl${ada.currentBoss.level} — Total HP: ${ada.currentBoss.dmgDealt}`);
+        recordBossHP(ada.currentBoss);
+        log(`Boss defeated: ${ada.currentBoss.name} [${ada.currentBoss.modifier || 'none'}] Lvl${ada.currentBoss.level} — Total HP: ${ada.currentBoss.dmgDealt}`);
         ada.currentBoss = null;
       }
 
@@ -1326,14 +1338,22 @@
     renderHUD();
   }
 
-  function recordBossHP(level, name, totalHP) {
-    const key = String(level);
+  function recordBossHP(boss) {
+    const level = boss.level;
+    const baseName = boss.baseName || boss.name;
+    const key = `${level}_${baseName}`; // group by level + base name
+
     if (!ada.bossHPData[key]) {
-      ada.bossHPData[key] = { samples: [], names: [] };
+      ada.bossHPData[key] = { level, baseName, samples: [], modifiers: {} };
     }
     const entry = ada.bossHPData[key];
-    entry.samples.push(totalHP);
-    if (!entry.names.includes(name)) entry.names.push(name);
+    entry.samples.push(boss.dmgDealt);
+
+    // Track per-modifier HP for analysis
+    const mod = boss.modifier || 'none';
+    if (!entry.modifiers[mod]) entry.modifiers[mod] = [];
+    entry.modifiers[mod].push(boss.dmgDealt);
+
     // Recalculate stats
     entry.avg = Math.round(entry.samples.reduce((a, b) => a + b, 0) / entry.samples.length);
     entry.min = Math.min(...entry.samples);
@@ -2345,33 +2365,55 @@
 
     // --- Boss HP Database Panel ---
     {
-      const levels = Object.keys(ada.bossHPData).sort((a, b) => parseInt(b) - parseInt(a));
+      const keys = Object.keys(ada.bossHPData).sort((a, b) => {
+        const la = ada.bossHPData[a]?.level || 0;
+        const lb = ada.bossHPData[b]?.level || 0;
+        return lb - la || a.localeCompare(b);
+      });
       let bossHtml = '';
-      if (levels.length > 0) {
-        // Show current fight if active
-        if (ada.currentBoss) {
-          const knownHP = ada.bossHPData[String(ada.currentBoss.level)];
-          const estHP = knownHP ? knownHP.avg : '?';
-          const pct = knownHP ? Math.min(100, Math.round((ada.currentBoss.dmgDealt / knownHP.avg) * 100)) : '?';
-          bossHtml += `<div style="background:rgba(255,100,100,0.1);padding:4px;border-radius:4px;margin-bottom:4px;">
-            <div style="color:#f88;font-weight:bold;">${ada.currentBoss.name} (Lvl ${ada.currentBoss.level})</div>
-            <div style="font-size:10px;">Dmg dealt: ${ada.currentBoss.dmgDealt.toLocaleString()} / ~${typeof estHP === 'number' ? estHP.toLocaleString() : estHP} HP (${pct}%)</div>
-          </div>`;
-        }
-        bossHtml += '<div style="max-height:120px;overflow-y:auto;font-size:10px;">';
-        for (const lvl of levels) {
-          const d = ada.bossHPData[lvl];
-          const names = d.names ? d.names.slice(0, 3).join(', ') : '';
+
+      // Show current fight if active
+      if (ada.currentBoss) {
+        const bossKey = `${ada.currentBoss.level}_${ada.currentBoss.baseName}`;
+        const knownHP = ada.bossHPData[bossKey];
+        const estHP = knownHP ? knownHP.avg : '?';
+        const pct = knownHP ? Math.min(100, Math.round((ada.currentBoss.dmgDealt / knownHP.avg) * 100)) : '?';
+        bossHtml += `<div style="background:rgba(255,100,100,0.1);padding:4px;border-radius:4px;margin-bottom:4px;">
+          <div style="color:#f88;font-weight:bold;">${ada.currentBoss.name} <span style="color:#f66;font-size:10px;">Lvl ${ada.currentBoss.level}</span></div>
+          ${ada.currentBoss.modifier ? `<div style="font-size:9px;color:#fa8;">Modifier: ${ada.currentBoss.modifier}</div>` : ''}
+          <div style="font-size:10px;">Dmg: ${ada.currentBoss.dmgDealt.toLocaleString()} / ~${typeof estHP === 'number' ? estHP.toLocaleString() : estHP} HP ${typeof pct === 'number' ? `(${pct}%)` : ''}</div>
+        </div>`;
+      }
+
+      if (keys.length > 0) {
+        bossHtml += '<div style="max-height:140px;overflow-y:auto;font-size:10px;">';
+        for (const key of keys) {
+          const d = ada.bossHPData[key];
+          // Modifier breakdown
+          let modInfo = '';
+          if (d.modifiers) {
+            const mods = Object.entries(d.modifiers).map(([mod, samples]) => {
+              const avg = Math.round(samples.reduce((a, b) => a + b, 0) / samples.length);
+              return `${mod}: ~${avg.toLocaleString()} (${samples.length})`;
+            });
+            if (mods.length > 1) {
+              modInfo = `<div style="font-size:9px;color:#666;margin-top:1px;padding-left:4px;">${mods.join(' | ')}</div>`;
+            }
+          }
           bossHtml += `<div class="inv-item">
-            <div class="item-row1"><span class="item-name">Lvl ${lvl}</span><span style="color:#888">${d.count} sample${d.count > 1 ? 's' : ''}</span></div>
+            <div class="item-row1">
+              <span class="item-name">${d.baseName || key}</span>
+              <span style="color:#888">${d.count}x</span>
+            </div>
             <div class="item-row2">
+              <span class="item-tier">Lvl ${d.level || '?'}</span>
               <span class="item-stats">avg ${d.avg.toLocaleString()} HP (${d.min.toLocaleString()}-${d.max.toLocaleString()})</span>
             </div>
-            ${names ? `<div style="font-size:9px;color:#555;margin-top:1px;">${names}</div>` : ''}
+            ${modInfo}
           </div>`;
         }
         bossHtml += '</div>';
-      } else {
+      } else if (!ada.currentBoss) {
         bossHtml = '<div style="color:#666;font-size:11px;">No data yet. Defeat bosses to build the database.</div>';
       }
       const bossPanel = makePanel('Boss HP Database', bossHtml);
