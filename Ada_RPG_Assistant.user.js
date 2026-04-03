@@ -1237,13 +1237,13 @@
     // No "HP" suffix. Colon + space between name and numbers.
     // Blank name (": 14/360") = your own character.
     if (/are injured|appears? healthy/i.test(t)) {
-      // Only process if it's OUR whohurt response
-      // Format: "galygious, you see ..." or ", you see ..." (blank name)
-      const isOurWhohurt = !ada.playerName ||
-                           tl.startsWith(ada.playerName.toLowerCase() + ',') ||
-                           tl.startsWith(ada.playerName.toLowerCase() + ' ') ||
-                           /^[,\s]*you see/i.test(t);
-      if (!isOurWhohurt) return; // someone else's response, skip
+      // Parse ANY !whohurt response (shared data — anyone's request is valid)
+      // Format: "galygious, you see d3v1b33t3r: 45/440, : 14/360, NorgothGaming: 121/460 are injured."
+      // The name at the start = who asked. Blank name in the list = who asked (not necessarily us).
+
+      // Determine who asked (name before ", you see" or at start)
+      const askerM = /^([a-z_][a-z0-9_]*),?\s*you see/i.exec(t);
+      const askerName = askerM ? askerM[1].toLowerCase() : null;
 
       ada.injuredParty = {}; // fresh data
       let foundPartyHp = false;
@@ -1253,28 +1253,36 @@
       let phMatch;
       while ((phMatch = partyHpRe.exec(t)) !== null) {
         const name = phMatch[1].toLowerCase();
+        // Skip the asker's name if it appears in the regex (it's the prefix, not a party member)
+        if (name === askerName && phMatch.index < 30) continue;
         const hp = parseInt(phMatch[2]);
         const hpMax = parseInt(phMatch[3]);
         ada.injuredParty[name] = { hp, hpMax };
         foundPartyHp = true;
+        // If this is our name, update our HP
         if (ada.playerName && name === ada.playerName.toLowerCase()) {
           ada.hp = hp;
           ada.hpMax = hpMax;
         }
       }
 
-      // Blank name (self): ", : 14/360" or "see : 14/360"
+      // Blank name in list: ", : 14/360" or "see : 14/360"
+      // This is the ASKER's HP (their name is omitted by Ada)
       const blankRe = /(?:,\s*|see\s+):\s*(\d+)\s*\/\s*(\d+)/gi;
       let bnMatch;
       while ((bnMatch = blankRe.exec(t)) !== null) {
         const hp = parseInt(bnMatch[1]);
         const hpMax = parseInt(bnMatch[2]);
-        // Only add to party HP if we know our name (otherwise we can't heal ourselves anyway)
-        if (ada.playerName) {
-          ada.injuredParty[ada.playerName.toLowerCase()] = { hp, hpMax };
+        // Figure out whose HP this is
+        const blankOwner = askerName || (ada.playerName ? ada.playerName.toLowerCase() : null);
+        if (blankOwner) {
+          ada.injuredParty[blankOwner] = { hp, hpMax };
+          // If the blank owner is us, update our character HP
+          if (ada.playerName && blankOwner === ada.playerName.toLowerCase()) {
+            ada.hp = hp;
+            ada.hpMax = hpMax;
+          }
         }
-        ada.hp = hp;
-        ada.hpMax = hpMax;
         foundPartyHp = true;
       }
 
@@ -2209,8 +2217,9 @@
       hudContainer.appendChild(charPanel);
     }
 
-    // --- Party Health Panel ---
-    const partyNames = Object.keys(ada.injuredParty);
+    // --- Party Health Panel (excludes self — self HP shown in Character panel) ---
+    const selfName = ada.playerName ? ada.playerName.toLowerCase() : null;
+    const partyNames = Object.keys(ada.injuredParty).filter(n => n !== selfName);
     if (partyNames.length > 0) {
       let partyHtml = '';
       for (const name of partyNames) {
