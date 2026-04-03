@@ -885,6 +885,12 @@
     minQuestTokenLevel: 0,
     maxQuestTokenLevel: 999,
 
+    // boss combat tracking (current fight)
+    currentBoss: null,       // { name, level, dmgDealt, startedAt }
+
+    // boss HP database: { level: { samples: [hp1, hp2, ...], avg, min, max } }
+    bossHPData: {},
+
     // pending action flags
     pendingHealTarget: null,
     awaitingShop: false,
@@ -922,6 +928,7 @@
         maxBossTokenLevel: ada.maxBossTokenLevel,
         minQuestTokenLevel: ada.minQuestTokenLevel,
         maxQuestTokenLevel: ada.maxQuestTokenLevel,
+        bossHPData: ada.bossHPData,
         savedAt: Date.now(),
       };
       localStorage.setItem(ADA_STATE_KEY, JSON.stringify(persist));
@@ -954,6 +961,7 @@
       if (s.maxBossTokenLevel != null) ada.maxBossTokenLevel = s.maxBossTokenLevel;
       if (s.minQuestTokenLevel != null) ada.minQuestTokenLevel = s.minQuestTokenLevel;
       if (s.maxQuestTokenLevel != null) ada.maxQuestTokenLevel = s.maxQuestTokenLevel;
+      if (s.bossHPData) ada.bossHPData = s.bossHPData;
       log('Loaded ada game state from localStorage');
     } catch (e) { warn('Failed to load ada state:', e); }
   }
@@ -1050,6 +1058,19 @@
       return;
     }
 
+    // --- Boss spawn detection ---
+    // "opens the Boss Token Lvl35 some rustling is heard nearby and a Agile Ancient Behemoth appears!"
+    const bossSpawnM = /Boss Token Lvl(\d+).*?(?:and |a )(.+?)\s*appears?/i.exec(t);
+    if (bossSpawnM) {
+      ada.currentBoss = {
+        name: bossSpawnM[2].trim(),
+        level: parseInt(bossSpawnM[1]),
+        dmgDealt: 0,
+        startedAt: now(),
+      };
+      log(`Boss spawned: ${ada.currentBoss.name} (Lvl ${ada.currentBoss.level})`);
+    }
+
     // --- Quest start / combat detection ---
     if (/\(Roll:\s*\d+\)/i.test(t) ||
         /swings? at|slashes? at|slams? |attacks? |bites? |casts? |spell hits/i.test(t)) {
@@ -1059,9 +1080,33 @@
       }
     }
 
-    // --- Quest end detection ---
-    if (/the party gains.*xp/i.test(t) || /is defeated\.\s*the party gains/i.test(t)) {
-      const wasBoss = /Boss Token|legendary/i.test(t) || ada.inQuest;
+    // --- Track damage dealt TO boss ---
+    if (ada.currentBoss) {
+      // Track damage TO the boss.
+      // Damage to boss: "swings at the Ancient Behemoth for 99 HP." — no "(hp/maxHP)" after
+      // Damage to player: "at Player for 78 HP. (282/360HP)." — HAS "(hp/maxHP)" after
+      // Also party-wide: "dealing 112 HP." — no player HP after = damage to players, skip
+      // Key: if the message has "(digits/digits" anywhere, it's damage TO a player
+      if (!/\(\d+\/\d+/.test(t) && !/dealing \d+ HP/i.test(t)) {
+        const dmgRe = /for (\d+) HP/gi;
+        let dmgMatch;
+        while ((dmgMatch = dmgRe.exec(t)) !== null) {
+          ada.currentBoss.dmgDealt += parseInt(dmgMatch[1]);
+        }
+      }
+    }
+
+    // --- Quest/Boss end detection ---
+    if (/is defeated\.\s*the party gains|the party gains.*xp/i.test(t)) {
+      const wasBoss = !!ada.currentBoss;
+
+      // Record boss HP data if we tracked a boss fight
+      if (ada.currentBoss && ada.currentBoss.dmgDealt > 0) {
+        recordBossHP(ada.currentBoss.level, ada.currentBoss.name, ada.currentBoss.dmgDealt);
+        log(`Boss defeated: ${ada.currentBoss.name} Lvl${ada.currentBoss.level} — Total HP: ${ada.currentBoss.dmgDealt}`);
+        ada.currentBoss = null;
+      }
+
       endQuest();
       tryParseQuestReward(t);
       playChime(wasBoss ? 'boss' : 'quest');
@@ -1254,6 +1299,22 @@
     }
 
     renderHUD();
+  }
+
+  function recordBossHP(level, name, totalHP) {
+    const key = String(level);
+    if (!ada.bossHPData[key]) {
+      ada.bossHPData[key] = { samples: [], names: [] };
+    }
+    const entry = ada.bossHPData[key];
+    entry.samples.push(totalHP);
+    if (!entry.names.includes(name)) entry.names.push(name);
+    // Recalculate stats
+    entry.avg = Math.round(entry.samples.reduce((a, b) => a + b, 0) / entry.samples.length);
+    entry.min = Math.min(...entry.samples);
+    entry.max = Math.max(...entry.samples);
+    entry.count = entry.samples.length;
+    saveAdaState();
   }
 
   function endQuest() {
@@ -2257,6 +2318,41 @@
     });
     hudContainer.appendChild(shopPanel);
 
+    // --- Boss HP Database Panel ---
+    {
+      const levels = Object.keys(ada.bossHPData).sort((a, b) => parseInt(b) - parseInt(a));
+      let bossHtml = '';
+      if (levels.length > 0) {
+        // Show current fight if active
+        if (ada.currentBoss) {
+          const knownHP = ada.bossHPData[String(ada.currentBoss.level)];
+          const estHP = knownHP ? knownHP.avg : '?';
+          const pct = knownHP ? Math.min(100, Math.round((ada.currentBoss.dmgDealt / knownHP.avg) * 100)) : '?';
+          bossHtml += `<div style="background:rgba(255,100,100,0.1);padding:4px;border-radius:4px;margin-bottom:4px;">
+            <div style="color:#f88;font-weight:bold;">${ada.currentBoss.name} (Lvl ${ada.currentBoss.level})</div>
+            <div style="font-size:10px;">Dmg dealt: ${ada.currentBoss.dmgDealt.toLocaleString()} / ~${typeof estHP === 'number' ? estHP.toLocaleString() : estHP} HP (${pct}%)</div>
+          </div>`;
+        }
+        bossHtml += '<div style="max-height:120px;overflow-y:auto;font-size:10px;">';
+        for (const lvl of levels) {
+          const d = ada.bossHPData[lvl];
+          const names = d.names ? d.names.slice(0, 3).join(', ') : '';
+          bossHtml += `<div class="inv-item">
+            <div class="item-row1"><span class="item-name">Lvl ${lvl}</span><span style="color:#888">${d.count} sample${d.count > 1 ? 's' : ''}</span></div>
+            <div class="item-row2">
+              <span class="item-stats">avg ${d.avg.toLocaleString()} HP (${d.min.toLocaleString()}-${d.max.toLocaleString()})</span>
+            </div>
+            ${names ? `<div style="font-size:9px;color:#555;margin-top:1px;">${names}</div>` : ''}
+          </div>`;
+        }
+        bossHtml += '</div>';
+      } else {
+        bossHtml = '<div style="color:#666;font-size:11px;">No data yet. Defeat bosses to build the database.</div>';
+      }
+      const bossPanel = makePanel('Boss HP Database', bossHtml);
+      hudContainer.appendChild(bossPanel);
+    }
+
     // --- Chat Log Panel (persistent — only append new entries to preserve scroll) ---
     if (!chatLogPanelRef || !chatLogPanelRef.parentElement) {
       // First render or panel was removed — create fresh
@@ -2392,6 +2488,8 @@
       adaQuestTokens(on = true) { ada.autoUseQuestTokens = !!on; renderHUD(); return ada.autoUseQuestTokens; },
       adaBossTokenRange(min = 0, max = 999) { ada.minBossTokenLevel = min; ada.maxBossTokenLevel = max; return { min, max }; },
       adaQuestTokenRange(min = 0, max = 999) { ada.minQuestTokenLevel = min; ada.maxQuestTokenLevel = max; return { min, max }; },
+      adaBossHP: () => ada.bossHPData,
+      adaBossHPClear: () => { ada.bossHPData = {}; saveAdaState(); return 'Boss HP data cleared'; },
       adaPotionThreshold(pct = 0.7) { ada.autoPotionThreshold = Math.max(0, Math.min(1, Number(pct) || 0.7)); return ada.autoPotionThreshold; },
       adaShopDB: () => SHOP_DB,
       adaShopLookup: (name) => SHOP_DB[name.toLowerCase()] || null,
