@@ -477,6 +477,7 @@
   const CHAT_LOG_STORE = 'messages';
   let chatLog = [];
   let chatLogDB = null;
+  let chatLogSeq = 0; // monotonic counter, never decreases
 
   // --- IndexedDB persistence for chat log ---
   function openChatLogDB() {
@@ -504,6 +505,7 @@
       const all = await idbGetAll(store);
       // Keep only last CHAT_LOG_MAX in memory
       chatLog = all.slice(-CHAT_LOG_MAX);
+      chatLogSeq = chatLog.length;
       log(`Chat log loaded: ${chatLog.length} entries from IndexedDB`);
 
       // Prune old entries if DB is too large
@@ -558,6 +560,7 @@
       message: message,
     };
     chatLog.push(entry);
+    chatLogSeq++;
     if (chatLog.length > CHAT_LOG_MAX) chatLog.shift();
 
     // Persist to IndexedDB
@@ -2488,26 +2491,27 @@
       chatLogInnerRef = logPanel.querySelector('.chat-log-panel');
       chatLogPanelRef = logPanel;
       lastRenderedLogCount = 0;
-      // Render entries newest-first (prepend = newest at top)
+      // Render entries newest-first
       const logEntries = getChatLog(30);
       for (let i = logEntries.length - 1; i >= 0; i--) {
         chatLogInnerRef.appendChild(makeChatLogEntryEl(logEntries[i]));
       }
-      lastRenderedLogCount = chatLog.length;
+      lastRenderedLogCount = chatLogSeq;
       hudContainer.appendChild(logPanel);
     } else {
       // Prepend new entries at the top (newest first)
-      const newCount = chatLog.length;
-      if (newCount > lastRenderedLogCount) {
-        const startIdx = Math.max(0, lastRenderedLogCount);
-        for (let i = newCount - 1; i >= startIdx; i--) {
+      if (chatLogSeq > lastRenderedLogCount) {
+        const newEntries = chatLogSeq - lastRenderedLogCount;
+        // Get the last N new entries from the end of chatLog
+        const start = Math.max(0, chatLog.length - newEntries);
+        for (let i = start; i < chatLog.length; i++) {
           chatLogInnerRef.insertBefore(makeChatLogEntryEl(chatLog[i]), chatLogInnerRef.firstChild);
         }
         // Trim old entries from bottom if too many (keep 30)
         while (chatLogInnerRef.children.length > 30) {
           chatLogInnerRef.removeChild(chatLogInnerRef.lastChild);
         }
-        lastRenderedLogCount = newCount;
+        lastRenderedLogCount = chatLogSeq;
       }
       // Re-append to ensure it's at the end of the panel list
       hudContainer.appendChild(chatLogPanelRef);
