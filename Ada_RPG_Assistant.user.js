@@ -1329,11 +1329,11 @@
 
   function tryParseQuestReward(t) {
     // "The party gains 79XP, 105G, and 25P"
-    const xpM = /gains?\s+(\d+)\s*XP/i.exec(t);
-    const gM = /(\d+)\s*G/i.exec(t);
-    const pM = /(\d+)\s*P/i.exec(t);
-    if (gM && ada.gold != null) ada.gold += parseInt(gM[1]);
-    if (pM && ada.plat != null) ada.plat += parseInt(pM[1]);
+    // Gold/plat rewards are split among party members (unknown formula),
+    // so don't update balances from here — use !g for accurate totals.
+    // Just queue a gold check so the HUD updates with the real amount.
+    ada.awaitingGold = true;
+    queueSend('!g', 'post-quest gold check');
   }
 
   function parseInventory(text) {
