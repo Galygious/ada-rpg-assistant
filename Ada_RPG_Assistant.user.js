@@ -828,7 +828,9 @@
 
   const ada = {
     // toggles
-    autoQuest: false,
+    autoStartQuest: false,  // start new quests (use tokens / !quest when "a quest is available")
+    autoJoinQuest: false,   // join quests others started ("has initiated a quest")
+    autoQuest: false,       // legacy — kept for compatibility, maps to both
     autoHeal: true,
     autoPotion: true,
     autoRevive: true,
@@ -922,6 +924,8 @@
         equippedItems: ada.equippedItems,
         inventory: ada.inventory,
         potionCount: ada.potionCount,
+        autoStartQuest: ada.autoStartQuest,
+        autoJoinQuest: ada.autoJoinQuest,
         autoUseBossTokens: ada.autoUseBossTokens,
         autoUseQuestTokens: ada.autoUseQuestTokens,
         minBossTokenLevel: ada.minBossTokenLevel,
@@ -955,6 +959,8 @@
       if (s.equippedItems) ada.equippedItems = s.equippedItems;
       if (s.inventory) ada.inventory = s.inventory;
       if (s.potionCount != null) ada.potionCount = s.potionCount;
+      if (s.autoStartQuest != null) ada.autoStartQuest = s.autoStartQuest;
+      if (s.autoJoinQuest != null) ada.autoJoinQuest = s.autoJoinQuest;
       if (s.autoUseBossTokens != null) ada.autoUseBossTokens = s.autoUseBossTokens;
       if (s.autoUseQuestTokens != null) ada.autoUseQuestTokens = s.autoUseQuestTokens;
       if (s.minBossTokenLevel != null) ada.minBossTokenLevel = s.minBossTokenLevel;
@@ -1055,17 +1061,25 @@
       ada.awaitingGold = false;
     }
 
-    // --- Quest announcement detection ---
-    if (tl.includes('a quest is available') || /has initiated a quest.*type !quest/i.test(t)) {
-      if (!ada.questJoined && ada.autoQuest) {
+    // --- Quest announcement: "A quest is available" = no one started yet ---
+    if (tl.includes('a quest is available')) {
+      if (!ada.questJoined && ada.autoStartQuest) {
         ada.questJoined = true;
-        // Try to use highest-level boss token first, then regular quest
         const tokenToUse = getBestToken();
         if (tokenToUse) {
-          queueSend(`!use ${tokenToUse}`, `auto-quest via token: ${tokenToUse}`);
+          queueSend(`!use ${tokenToUse}`, `auto-start quest via token: ${tokenToUse}`);
         } else {
-          queueSend('!quest', 'auto-quest join');
+          queueSend('!quest', 'auto-start quest');
         }
+      }
+      return;
+    }
+
+    // --- Quest initiated by someone else: "has initiated a quest. To join, type !quest" ---
+    if (/has initiated a (?:legendary )?quest.*type !quest/i.test(t)) {
+      if (!ada.questJoined && ada.autoJoinQuest) {
+        ada.questJoined = true;
+        queueSend('!quest', 'auto-join quest');
       }
       return;
     }
@@ -2080,7 +2094,8 @@
         Quest: ${ada.inQuest ? 'IN COMBAT' : 'Idle'} ${ada.isDead ? '| DEAD' : ''}
       </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
-        <button class="ada-toggle" data-toggle="autoQuest" style="background:${ada.autoQuest ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoQuest ? '#4a4' : '#844'};color:${ada.autoQuest ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Quest ${ada.autoQuest ? 'ON' : 'OFF'}</button>
+        <button class="ada-toggle" data-toggle="autoStartQuest" style="background:${ada.autoStartQuest ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoStartQuest ? '#4a4' : '#844'};color:${ada.autoStartQuest ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Start ${ada.autoStartQuest ? 'ON' : 'OFF'}</button>
+        <button class="ada-toggle" data-toggle="autoJoinQuest" style="background:${ada.autoJoinQuest ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoJoinQuest ? '#4a4' : '#844'};color:${ada.autoJoinQuest ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Join ${ada.autoJoinQuest ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="autoHeal" style="background:${ada.autoHeal ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoHeal ? '#4a4' : '#844'};color:${ada.autoHeal ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Heal ${ada.autoHeal ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="autoPotion" style="background:${ada.autoPotion ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoPotion ? '#4a4' : '#844'};color:${ada.autoPotion ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Potion ${ada.autoPotion ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="autoRevive" style="background:${ada.autoRevive ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoRevive ? '#4a4' : '#844'};color:${ada.autoRevive ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Revive ${ada.autoRevive ? 'ON' : 'OFF'}</button>
@@ -2559,7 +2574,8 @@
 
       // ada
       adaState: () => ({ ...ada }),
-      adaAutoQuest(on = true) { ada.autoQuest = !!on; renderHUD(); return ada.autoQuest; },
+      adaAutoStartQuest(on = true) { ada.autoStartQuest = !!on; renderHUD(); return ada.autoStartQuest; },
+      adaAutoJoinQuest(on = true) { ada.autoJoinQuest = !!on; renderHUD(); return ada.autoJoinQuest; },
       adaAutoHeal(on = true) { ada.autoHeal = !!on; renderHUD(); return ada.autoHeal; },
       adaAutoPotion(on = true) { ada.autoPotion = !!on; renderHUD(); return ada.autoPotion; },
       adaAutoRevive(on = true) { ada.autoRevive = !!on; renderHUD(); return ada.autoRevive; },
