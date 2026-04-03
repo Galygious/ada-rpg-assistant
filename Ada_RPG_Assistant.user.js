@@ -2600,10 +2600,24 @@
   }
 
   // --- Boot ---
+  function detectPlayerName() {
+    try {
+      const cookie = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('twilight-user='));
+      if (cookie) {
+        const json = JSON.parse(decodeURIComponent(cookie.split('=').slice(1).join('=')));
+        if (json.login) {
+          ada.playerName = json.login;
+          log('Player name from cookie:', ada.playerName);
+        }
+      }
+    } catch (e) { /* cookie not available or malformed */ }
+  }
+
   async function boot() {
     await initChatLogDB();
     loadStateFromLS();
     loadAdaState();
+    detectPlayerName();
     injectPageSniffer();
     expose();
 
