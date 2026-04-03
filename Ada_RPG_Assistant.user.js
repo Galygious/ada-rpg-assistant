@@ -2601,17 +2601,54 @@
 
   // --- Boot ---
   function detectPlayerName() {
+    // Try multiple sources for the logged-in username
     try {
+      // 1. Twitch stores user info in localStorage
+      const twilightUser = localStorage.getItem('twilight-user');
+      if (twilightUser) {
+        const json = JSON.parse(twilightUser);
+        if (json.login) {
+          ada.playerName = json.login;
+          log('Player name from localStorage:', ada.playerName);
+          return;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      // 2. Try cookie (may not work in all contexts)
       const cookie = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('twilight-user='));
       if (cookie) {
         const json = JSON.parse(decodeURIComponent(cookie.split('=').slice(1).join('=')));
         if (json.login) {
           ada.playerName = json.login;
           log('Player name from cookie:', ada.playerName);
+          return;
         }
       }
-    } catch (e) { /* cookie not available or malformed */ }
+    } catch (_) {}
+
+    try {
+      // 3. Inject a script to read from window.__twilight or React internals
+      const s = document.createElement('script');
+      s.textContent = `try {
+        const u = window.__twilight?.auth?.user?.login ||
+                  window.__NEXT_DATA__?.props?.authToken?.login ||
+                  null;
+        if (u) window.postMessage({ __ada_username: u }, '*');
+      } catch(e) {}`;
+      document.documentElement.appendChild(s);
+      s.remove();
+    } catch (_) {}
   }
+
+  // Listen for username from injected script
+  window.addEventListener('message', (ev) => {
+    if (ev.data && ev.data.__ada_username && !ada.playerName) {
+      ada.playerName = ev.data.__ada_username;
+      log('Player name from page context:', ada.playerName);
+    }
+  });
 
   async function boot() {
     await initChatLogDB();
