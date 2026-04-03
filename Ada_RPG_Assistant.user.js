@@ -830,6 +830,7 @@
     // toggles
     autoStartQuest: false,  // start new quests (use tokens / !quest when "a quest is available")
     autoJoinQuest: false,   // join quests others started ("has initiated a quest")
+    soundEnabled: false,    // audio chimes on quest/boss/death
     autoQuest: false,       // legacy — kept for compatibility, maps to both
     autoHeal: true,
     autoPotion: true,
@@ -924,8 +925,13 @@
         equippedItems: ada.equippedItems,
         inventory: ada.inventory,
         potionCount: ada.potionCount,
+        autoHeal: ada.autoHeal,
+        autoPotion: ada.autoPotion,
+        autoRevive: ada.autoRevive,
+        autoPotionThreshold: ada.autoPotionThreshold,
         autoStartQuest: ada.autoStartQuest,
         autoJoinQuest: ada.autoJoinQuest,
+        soundEnabled: ada.soundEnabled,
         autoUseBossTokens: ada.autoUseBossTokens,
         autoUseQuestTokens: ada.autoUseQuestTokens,
         minBossTokenLevel: ada.minBossTokenLevel,
@@ -959,8 +965,13 @@
       if (s.equippedItems) ada.equippedItems = s.equippedItems;
       if (s.inventory) ada.inventory = s.inventory;
       if (s.potionCount != null) ada.potionCount = s.potionCount;
+      if (s.autoHeal != null) ada.autoHeal = s.autoHeal;
+      if (s.autoPotion != null) ada.autoPotion = s.autoPotion;
+      if (s.autoRevive != null) ada.autoRevive = s.autoRevive;
+      if (s.autoPotionThreshold != null) ada.autoPotionThreshold = s.autoPotionThreshold;
       if (s.autoStartQuest != null) ada.autoStartQuest = s.autoStartQuest;
       if (s.autoJoinQuest != null) ada.autoJoinQuest = s.autoJoinQuest;
+      if (s.soundEnabled != null) ada.soundEnabled = s.soundEnabled;
       if (s.autoUseBossTokens != null) ada.autoUseBossTokens = s.autoUseBossTokens;
       if (s.autoUseQuestTokens != null) ada.autoUseQuestTokens = s.autoUseQuestTokens;
       if (s.minBossTokenLevel != null) ada.minBossTokenLevel = s.minBossTokenLevel;
@@ -1420,6 +1431,7 @@
   }
 
   function playChime(type = 'quest') {
+    if (!ada.soundEnabled) return;
     try {
       const ctx = getAudioCtx();
       const now = ctx.currentTime;
@@ -2117,6 +2129,7 @@
         <button class="ada-toggle" data-toggle="autoHeal" style="background:${ada.autoHeal ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoHeal ? '#4a4' : '#844'};color:${ada.autoHeal ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Heal ${ada.autoHeal ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="autoPotion" style="background:${ada.autoPotion ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoPotion ? '#4a4' : '#844'};color:${ada.autoPotion ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Potion ${ada.autoPotion ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="autoRevive" style="background:${ada.autoRevive ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoRevive ? '#4a4' : '#844'};color:${ada.autoRevive ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Revive ${ada.autoRevive ? 'ON' : 'OFF'}</button>
+        <button class="ada-toggle" data-toggle="soundEnabled" style="background:${ada.soundEnabled ? '#2a3a5a' : '#3a2020'};border:1px solid ${ada.soundEnabled ? '#47a' : '#844'};color:${ada.soundEnabled ? '#8cf' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Sound ${ada.soundEnabled ? 'ON' : 'OFF'}</button>
       </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;">
         <button class="ada-toggle" data-toggle="autoUseBossTokens" style="background:${ada.autoUseBossTokens ? '#2a3a5a' : '#3a2020'};border:1px solid ${ada.autoUseBossTokens ? '#47a' : '#844'};color:${ada.autoUseBossTokens ? '#8cf' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Boss Tkn ${ada.autoUseBossTokens ? 'ON' : 'OFF'}</button>
@@ -2475,30 +2488,24 @@
       chatLogInnerRef = logPanel.querySelector('.chat-log-panel');
       chatLogPanelRef = logPanel;
       lastRenderedLogCount = 0;
-      // Render all current entries
+      // Render entries newest-first (prepend = newest at top)
       const logEntries = getChatLog(30);
-      for (const e of logEntries) {
-        chatLogInnerRef.appendChild(makeChatLogEntryEl(e));
+      for (let i = logEntries.length - 1; i >= 0; i--) {
+        chatLogInnerRef.appendChild(makeChatLogEntryEl(logEntries[i]));
       }
       lastRenderedLogCount = chatLog.length;
       hudContainer.appendChild(logPanel);
     } else {
-      // Append only new entries since last render
+      // Prepend new entries at the top (newest first)
       const newCount = chatLog.length;
       if (newCount > lastRenderedLogCount) {
         const startIdx = Math.max(0, lastRenderedLogCount);
-        for (let i = startIdx; i < newCount; i++) {
-          chatLogInnerRef.appendChild(makeChatLogEntryEl(chatLog[i]));
+        for (let i = newCount - 1; i >= startIdx; i--) {
+          chatLogInnerRef.insertBefore(makeChatLogEntryEl(chatLog[i]), chatLogInnerRef.firstChild);
         }
-        // Trim old entries from DOM if too many (keep last 30)
+        // Trim old entries from bottom if too many (keep 30)
         while (chatLogInnerRef.children.length > 30) {
-          chatLogInnerRef.removeChild(chatLogInnerRef.firstChild);
-        }
-        // Only auto-scroll if user was already at the bottom
-        if (chatLogWasAtBottom) {
-          chatLogInnerRef.scrollTop = chatLogInnerRef.scrollHeight;
-        } else {
-          chatLogInnerRef.scrollTop = savedChatLogScroll;
+          chatLogInnerRef.removeChild(chatLogInnerRef.lastChild);
         }
         lastRenderedLogCount = newCount;
       }
