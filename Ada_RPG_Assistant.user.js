@@ -1119,9 +1119,34 @@
       return;
     }
 
+    // --- Total party wipe ---
+    if (/party has been defeated/i.test(t)) {
+      ada.isDead = true;
+      // Record partial boss data if we were tracking
+      if (ada.currentBoss && ada.currentBoss.dmgDealt > 0) {
+        log(`Boss wipe: ${ada.currentBoss.name} Lvl${ada.currentBoss.level} — Dmg dealt before wipe: ${ada.currentBoss.dmgDealt}`);
+        ada.currentBoss = null;
+      }
+      endQuest();
+      playChime('death');
+      if (ada.autoRevive) {
+        queueSend('!revive', 'auto-revive self');
+      }
+      return;
+    }
+
     // --- Death detection ---
-    if (/has fallen/i.test(t) || /you're a corpse/i.test(t) || /you are dead/i.test(t)) {
-      if (ada.playerName && (tl.includes(ada.playerName.toLowerCase()) || /^\s*has fallen/i.test(t))) {
+    if (/has fallen/i.test(t) || /have fallen/i.test(t) || /you're a corpse/i.test(t) || /you are dead/i.test(t)) {
+      // Check if WE fell:
+      // 1. Message contains our name + "has fallen"
+      // 2. Blank name pattern: "HP.  has fallen" or "HP. , Name and Name have fallen"
+      //    (two spaces before "has fallen" = blank name = us)
+      const isSelfDeath = (ada.playerName && tl.includes(ada.playerName.toLowerCase())) ||
+                          /\.\s{2,}has fallen/i.test(t) ||         // "HP.  has fallen"
+                          /\.\s{2,}and\s/i.test(t) ||              // "HP.  and Name have fallen"
+                          /\.\s+,\s/i.test(t) ||                   // "HP. , Name have fallen"
+                          /dealing \d+ HP\.\s+has fallen/i.test(t); // "dealing 252 HP. has fallen"
+      if (isSelfDeath) {
         playChime('death');
         ada.isDead = true;
         if (ada.autoRevive) {
