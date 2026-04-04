@@ -1340,10 +1340,37 @@
       return;
     }
 
-    // "drinks a potion" - potion used successfully
-    if (/drinks? a potion/i.test(t) || /chugs? a potion/i.test(t)) {
+    // Potion use: "apt_ray5233 retrieves a potion... recovers 93HP. (228/250HP). There are 4917 potions remaining."
+    // Also: blank name for self
+    const potionUseM = /(\w*)\s*retrieves a potion.*?\((\d+)\/(\d+)HP\).*?(\d+) potions remaining/i.exec(t);
+    if (potionUseM) {
+      const drinkerRaw = potionUseM[1].toLowerCase().trim();
+      const hp = parseInt(potionUseM[2]);
+      const hpMax = parseInt(potionUseM[3]);
+      const remaining = parseInt(potionUseM[4]);
+      const selfName = ada.playerName ? ada.playerName.toLowerCase() : null;
+      const drinker = drinkerRaw || selfName;
+
+      // Update potion count
+      ada.potionCount = remaining;
+
+      // Update HP
+      if (drinker) {
+        if (ada.injuredParty[drinker]) {
+          ada.injuredParty[drinker] = { hp, hpMax };
+        }
+        if (drinker === selfName) {
+          ada.hp = hp;
+          ada.hpMax = hpMax;
+          ada.potionCooldownUntil = now() + 30000;
+        }
+      }
+      renderHUD();
+    }
+    // Also catch "drinks a potion" / "chugs a potion" without the full format
+    else if (/drinks? a potion/i.test(t) || /chugs? a potion/i.test(t)) {
       if (ada.potionCount > 0) ada.potionCount--;
-      ada.potionCooldownUntil = now() + 30000; // 30s cooldown
+      ada.potionCooldownUntil = now() + 30000;
     }
 
     // --- Transfer HP tracking ---
@@ -2258,21 +2285,21 @@
       if (ada.transfers != null) charHtml += `<div class="stat-line"><span class="stat-label">Transfers:</span> <span class="stat-value">${ada.transfers}</span></div>`;
       if (ada.stance) charHtml += `<div class="stat-line"><span class="stat-label">Stance:</span> <span class="stat-value">${ada.stance}</span></div>`;
       if (ada.attunement) charHtml += `<div class="stat-line"><span class="stat-label">Attunement:</span> <span class="stat-value">${ada.attunement}</span></div>`;
-      // Equipped gear — flat list from equippedItems
+      // Equipped gear — two-row format like shop items
       if (ada.equippedItems && ada.equippedItems.length > 0) {
-        charHtml += '<div style="margin-top:4px;border-top:1px solid #303032;padding-top:3px;font-size:11px;">';
-        charHtml += '<div class="stat-line" style="color:#888;margin-bottom:2px;">Equipped:</div>';
+        charHtml += '<div style="margin-top:4px;border-top:1px solid #303032;padding-top:3px;">';
+        charHtml += '<div style="color:#a0a0ff;font-size:10px;font-weight:bold;margin-bottom:2px;">Equipped</div>';
         for (const itemName of ada.equippedItems) {
           const dbItem = SHOP_DB[itemName.toLowerCase()];
-          let statsStr = '';
-          if (dbItem) {
-            const parts = [`T${dbItem.tier}`];
-            if (dbItem.dice) parts.push(dbItem.dice);
-            if (dbItem.avgDmg > 0) parts.push(`avg ${dbItem.avgDmg}`);
-            if (dbItem.skill !== 'None' && dbItem.skillBonus > 0) parts.push(`${dbItem.skill}+${dbItem.skillBonus}`);
-            statsStr = ` <span style="color:#666">${parts.join(', ')}</span>`;
-          }
-          charHtml += `<div class="stat-line" style="padding-left:8px;"><span class="stat-value">${itemName}${statsStr}</span></div>`;
+          const diceStr = dbItem && dbItem.avgDmg > 0 ? `${dbItem.dice} (avg ${dbItem.avgDmg})` : '';
+          const skillStr = dbItem && dbItem.skill !== 'None' ? `${dbItem.skill} +${dbItem.skillBonus}` : '';
+          const statsLine = [diceStr, skillStr].filter(Boolean).join(' | ');
+          charHtml += `<div class="inv-item">
+            <div class="item-row1"><span class="item-name">${itemName}</span></div>
+            ${dbItem ? `<div class="item-row2">
+              <span class="item-stats"><span class="item-tier">T${dbItem.tier} ${dbItem.slot}</span>${statsLine ? ' · ' + statsLine : ''}</span>
+            </div>` : ''}
+          </div>`;
         }
         charHtml += '</div>';
       }
