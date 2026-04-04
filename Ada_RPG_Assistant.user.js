@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ada RPG Assistant (tchat + automation)
 // @namespace    galydev.twitch.ada
-// @version      34
+// @version      35
 // @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD.
 // @match        https://www.twitch.tv/*
 // @run-at       document-start
@@ -2349,10 +2349,10 @@
           } else {
             // Skip off hand if two-handed weapon equipped
             if (slot.key === 'OffHand' && hasTwoHanded) continue;
-            charHtml += `<div class="inv-item" style="opacity:0.35;">
+            charHtml += `<div class="inv-item">
               <div class="item-row1">
-                <span class="item-name" style="color:#555;font-style:italic;">Empty</span>
-                <span style="color:#444;font-size:9px;">${slot.label}</span>
+                <span class="item-name" style="color:#aaa;font-style:italic;">— empty —</span>
+                <span style="color:#888;font-size:9px;">${slot.label}</span>
               </div>
             </div>`;
           }
