@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ada RPG Assistant (tchat + automation)
 // @namespace    galydev.twitch.ada
-// @version      36
+// @version      37
 // @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD.
 // @match        https://www.twitch.tv/*
 // @run-at       document-start
@@ -2291,7 +2291,10 @@
       let charHtml = '';
       if (ada.playerName) charHtml += `<div class="stat-line"><span class="stat-label">Name:</span> <span class="stat-value">${ada.playerName}</span></div>`;
       if (ada.level) charHtml += `<div class="stat-line"><span class="stat-label">Level:</span> <span class="stat-value">${ada.level} ${ada.playerClass || ''}</span></div>`;
-      if (ada.xp != null) charHtml += `<div class="stat-line"><span class="stat-label">XP:</span> <span class="stat-value">${ada.xp}/${ada.xpMax || '?'}</span></div>`;
+      if (ada.xp != null) {
+        const xpTotal = ada.xpMax != null ? ada.xp + ada.xpMax : null;
+        charHtml += `<div class="stat-line"><span class="stat-label">XP:</span> <span class="stat-value">${ada.xp}/${xpTotal || '?'} (${ada.xpMax || '?'} to next)</span></div>`;
+      }
       if (ada.hp != null) {
         const ratio = ada.hpMax ? ada.hp / ada.hpMax : 1;
         charHtml += `<div class="hp-bar"><div class="hp-bar-fill" style="width:${ratio*100}%;background:${hpColor(ratio)}"></div><div class="hp-bar-text">${ada.hp}/${ada.hpMax} HP</div></div>`;
