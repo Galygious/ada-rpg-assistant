@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ada RPG Assistant (tchat + automation)
 // @namespace    galydev.twitch.ada
-// @version      32
+// @version      33
 // @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD.
 // @match        https://www.twitch.tv/*
 // @run-at       document-start
@@ -1681,7 +1681,7 @@
 
     // Equipment parsing — "Equipped items: mythril sword, adamantite shield, starmetal armor, talisman of the eternal flame."
     // It's a comma-separated list, NOT slot: item format
-    const eqM = /Equipped items:\s*(.+?)\.?\s*(?:Transfers|$)/i.exec(text);
+    const eqM = /Equipped items:\s*(.+?)\.?\s*(?:Transfers|Attunement|Stance|\.{3,}|$)/i.exec(text);
     if (eqM) {
       const items = eqM[1].split(',').map(s => s.trim()).filter(s => s.length > 0 && !/none|empty|nothing/i.test(s));
       ada.equippedItems = items;
