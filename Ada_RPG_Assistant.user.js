@@ -8,6 +8,8 @@
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
 // @connect      gql.twitch.tv
+// @updateURL    https://raw.githubusercontent.com/Galygious/ada-rpg-assistant/master/Ada_RPG_Assistant.user.js
+// @downloadURL  https://raw.githubusercontent.com/Galygious/ada-rpg-assistant/master/Ada_RPG_Assistant.user.js
 // ==/UserScript==
 
 (() => {
