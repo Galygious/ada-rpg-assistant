@@ -1336,7 +1336,7 @@
     // "drinks a potion" - potion used successfully
     if (/drinks? a potion/i.test(t) || /chugs? a potion/i.test(t)) {
       if (ada.potionCount > 0) ada.potionCount--;
-      ada.potionCooldownUntil = now() + 10000; // 10s cooldown
+      ada.potionCooldownUntil = now() + 30000; // 30s cooldown
     }
 
     // --- Heal cooldown ---
@@ -1733,7 +1733,7 @@
     if (ada.potionCount <= 0) return;
 
     queueSend('!heal', `auto-potion (${ada.hp}/${ada.hpMax})`);
-    ada.potionCooldownUntil = now() + 10000; // 10s cooldown
+    ada.potionCooldownUntil = now() + 30000; // 30s cooldown
   }
 
   function getBestToken() {
