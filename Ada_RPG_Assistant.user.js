@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ada RPG Assistant (tchat + automation)
 // @namespace    galydev.twitch.ada
-// @version      35
+// @version      36
 // @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD.
 // @match        https://www.twitch.tv/*
 // @run-at       document-start
@@ -1331,6 +1331,20 @@
         ada.injuredParty[ada.playerName.toLowerCase()] = { hp, hpMax };
       }
       tryAutoPotion();
+    }
+
+    // --- Seer attunement heal+attack ---
+    // "apt_ray5233's emerald staff flashes blue as SilverModBot is healed for 100HP (133/220) and lashes out at the Avatar of Light for 57 HP."
+    const seerHealM = /(\w+)\s+is healed for (\d+)HP\s*\((\d+)\/(\d+)\)/i.exec(t);
+    if (seerHealM) {
+      const target = seerHealM[1].toLowerCase();
+      const hp = parseInt(seerHealM[3]);
+      const hpMax = parseInt(seerHealM[4]);
+      ada.injuredParty[target] = { hp, hpMax };
+      if (ada.playerName && target === ada.playerName.toLowerCase()) {
+        ada.hp = hp;
+        ada.hpMax = hpMax;
+      }
     }
 
     // --- Potion cooldown ---
