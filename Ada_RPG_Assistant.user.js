@@ -1344,8 +1344,45 @@
       ada.potionCooldownUntil = now() + 30000; // 30s cooldown
     }
 
-    // --- Heal cooldown ---
-    const healCdMatch = /transference.*?(\d+)\s*seconds?/i.exec(t);
+    // --- Transfer HP tracking ---
+    // "galygious meditates over apt_ray5233 transferring some of apt_ray5233's wounds and blood loss (209HP) to himself."
+    // Caster loses HP, target gains HP. Caster name can be blank (= us).
+    const transferM = /(\w*)\s*meditates over (\w+) transferring.*?\((\d+)HP\)/i.exec(t);
+    if (transferM) {
+      const casterRaw = transferM[1].toLowerCase().trim();
+      const target = transferM[2].toLowerCase();
+      const amount = parseInt(transferM[3]);
+      const selfName = ada.playerName ? ada.playerName.toLowerCase() : null;
+      const caster = casterRaw || selfName; // blank = us
+
+      // Update caster HP (loses health)
+      if (caster && ada.injuredParty[caster]) {
+        ada.injuredParty[caster].hp = Math.max(0, ada.injuredParty[caster].hp - amount);
+        if (caster === selfName && ada.hp != null) {
+          ada.hp = Math.max(0, ada.hp - amount);
+        }
+      } else if (caster === selfName && ada.hp != null) {
+        ada.hp = Math.max(0, ada.hp - amount);
+      }
+
+      // Update target HP (gains health)
+      if (ada.injuredParty[target]) {
+        ada.injuredParty[target].hp = Math.min(ada.injuredParty[target].hpMax, ada.injuredParty[target].hp + amount);
+        if (target === selfName && ada.hp != null) {
+          ada.hp = Math.min(ada.hpMax || 9999, ada.hp + amount);
+        }
+      }
+
+      // Set transfer cooldown (90s)
+      if (caster === selfName) {
+        ada.healCooldownUntil = now() + 90000;
+      }
+
+      renderHUD();
+    }
+
+    // --- Heal cooldown from "please wait X seconds" ---
+    const healCdMatch = /transference.*?wait\s+(\d+)\s*seconds?/i.exec(t);
     if (healCdMatch) {
       ada.healCooldownUntil = now() + parseInt(healCdMatch[1]) * 1000;
     }
