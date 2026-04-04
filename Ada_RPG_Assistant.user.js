@@ -2353,17 +2353,15 @@
     // --- Shop Panel ---
     // Check if shop data expired
     const shopExpired = ada.shopExpiresAt && now() > ada.shopExpiresAt;
-    if (shopExpired) {
-      ada.shopItems = [];
-      ada.shopExpiresAt = null;
-    }
 
     let shopHtml = '';
     if (ada.shopItems.length === 0) {
       shopHtml = '<div style="color:#666;font-size:11px;">No shop data. Click Refresh to load.</div>';
     } else {
-      // Show expiry timer
-      if (ada.shopExpiresAt) {
+      // Show expiry timer or expired notice
+      if (shopExpired) {
+        shopHtml += `<div style="font-size:10px;color:#a44;margin-bottom:4px;">Shop expired — items may have changed</div>`;
+      } else if (ada.shopExpiresAt) {
         const secsLeft = Math.max(0, Math.ceil((ada.shopExpiresAt - now()) / 1000));
         const minsLeft = Math.floor(secsLeft / 60);
         const sLeft = secsLeft % 60;
@@ -2387,7 +2385,7 @@
         }
       }
 
-      shopHtml += '<div class="shop-scroll" style="max-height:160px;overflow-y:auto;font-size:10px;">';
+      shopHtml += `<div class="shop-scroll" style="max-height:160px;overflow-y:auto;font-size:10px;${shopExpired ? 'opacity:0.4;' : ''}">`;
       const sortedShopItems = [...ada.shopItems].sort((a, b) => {
         const ta = SHOP_DB[a]?.tier || 0;
         const tb = SHOP_DB[b]?.tier || 0;
