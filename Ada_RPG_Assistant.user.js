@@ -837,7 +837,9 @@
     autoQuest: false,       // legacy — kept for compatibility, maps to both
     autoHeal: true,
     autoPotion: true,
-    autoRevive: true,
+    autoReviveSelf: false,   // !revive after death (lower success)
+    autoReviveOthers: true,  // !revive <name> dead party members
+    autoRevive: true,        // legacy compat
     autoPotionThreshold: 0.7,
 
     // character
@@ -930,7 +932,8 @@
         potionCount: ada.potionCount,
         autoHeal: ada.autoHeal,
         autoPotion: ada.autoPotion,
-        autoRevive: ada.autoRevive,
+        autoReviveSelf: ada.autoReviveSelf,
+        autoReviveOthers: ada.autoReviveOthers,
         autoPotionThreshold: ada.autoPotionThreshold,
         autoStartQuest: ada.autoStartQuest,
         autoJoinQuest: ada.autoJoinQuest,
@@ -970,7 +973,8 @@
       if (s.potionCount != null) ada.potionCount = s.potionCount;
       if (s.autoHeal != null) ada.autoHeal = s.autoHeal;
       if (s.autoPotion != null) ada.autoPotion = s.autoPotion;
-      if (s.autoRevive != null) ada.autoRevive = s.autoRevive;
+      if (s.autoReviveSelf != null) ada.autoReviveSelf = s.autoReviveSelf;
+      if (s.autoReviveOthers != null) ada.autoReviveOthers = s.autoReviveOthers;
       if (s.autoPotionThreshold != null) ada.autoPotionThreshold = s.autoPotionThreshold;
       if (s.autoStartQuest != null) ada.autoStartQuest = s.autoStartQuest;
       if (s.autoJoinQuest != null) ada.autoJoinQuest = s.autoJoinQuest;
@@ -1186,7 +1190,7 @@
       }
       endQuest();
       playChime('death');
-      if (ada.autoRevive && now() >= ada.reviveCooldownUntil) {
+      if (ada.autoReviveSelf && now() >= ada.reviveCooldownUntil) {
         queueSend('!revive', 'auto-revive self');
         ada.reviveCooldownUntil = now() + 10000;
       }
@@ -1208,7 +1212,7 @@
         playChime('death');
         ada.isDead = true;
         // Don't auto-revive during combat — wait for quest to end
-        if (ada.autoRevive && !ada.inQuest && now() >= ada.reviveCooldownUntil) {
+        if (ada.autoReviveSelf && !ada.inQuest && now() >= ada.reviveCooldownUntil) {
           queueSend('!revive', 'auto-revive self');
           ada.reviveCooldownUntil = now() + 10000;
         }
@@ -1291,6 +1295,7 @@
       if (foundPartyHp) {
         ada.awaitingWho = false;
         tryAutoHeal();
+        tryAutoReviveOthers();
         tryAutoPotion();
       }
       renderHUD();
@@ -1435,8 +1440,8 @@
     ada.questJoined = false;
     ada.questStartedAt = null;
     // If we're dead and combat just ended, now we can revive
-    if (ada.isDead && ada.autoRevive && now() >= ada.reviveCooldownUntil) {
-      queueSend('!revive', 'auto-revive after combat');
+    if (ada.isDead && ada.autoReviveSelf && now() >= ada.reviveCooldownUntil) {
+      queueSend('!revive', 'auto-revive self after combat');
       ada.reviveCooldownUntil = now() + 10000;
     }
   }
@@ -1723,6 +1728,22 @@
     ada.pendingHealTarget = target.name;
     queueSend(`!t ${target.name}`, `auto-heal ${target.name} (${target.hp}/${target.hpMax})`);
     ada.healCooldownUntil = now() + 90000; // 90s transfer cooldown
+  }
+
+  function tryAutoReviveOthers() {
+    if (!ada.autoReviveOthers || ada.isDead || ada.inQuest) return;
+    if (now() < ada.reviveCooldownUntil) return;
+
+    const selfName = ada.playerName ? ada.playerName.toLowerCase() : null;
+    for (const [name, data] of Object.entries(ada.injuredParty)) {
+      if (name.length < 2 || /^_/.test(name)) continue;
+      if (name === selfName) continue;
+      if (data.hp <= 0) {
+        queueSend(`!revive ${name}`, `auto-revive ${name}`);
+        ada.reviveCooldownUntil = now() + 10000;
+        return; // one at a time
+      }
+    }
   }
 
   function tryAutoPotion() {
@@ -2156,7 +2177,8 @@
         <button class="ada-toggle" data-toggle="autoJoinQuest" style="background:${ada.autoJoinQuest ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoJoinQuest ? '#4a4' : '#844'};color:${ada.autoJoinQuest ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Join ${ada.autoJoinQuest ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="autoHeal" style="background:${ada.autoHeal ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoHeal ? '#4a4' : '#844'};color:${ada.autoHeal ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Heal ${ada.autoHeal ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="autoPotion" style="background:${ada.autoPotion ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoPotion ? '#4a4' : '#844'};color:${ada.autoPotion ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Potion ${ada.autoPotion ? 'ON' : 'OFF'}</button>
-        <button class="ada-toggle" data-toggle="autoRevive" style="background:${ada.autoRevive ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoRevive ? '#4a4' : '#844'};color:${ada.autoRevive ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Revive ${ada.autoRevive ? 'ON' : 'OFF'}</button>
+        <button class="ada-toggle" data-toggle="autoReviveSelf" style="background:${ada.autoReviveSelf ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoReviveSelf ? '#4a4' : '#844'};color:${ada.autoReviveSelf ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Self-Res ${ada.autoReviveSelf ? 'ON' : 'OFF'}</button>
+        <button class="ada-toggle" data-toggle="autoReviveOthers" style="background:${ada.autoReviveOthers ? '#2a5a2a' : '#3a2020'};border:1px solid ${ada.autoReviveOthers ? '#4a4' : '#844'};color:${ada.autoReviveOthers ? '#8f8' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Res Others ${ada.autoReviveOthers ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="soundEnabled" style="background:${ada.soundEnabled ? '#2a3a5a' : '#3a2020'};border:1px solid ${ada.soundEnabled ? '#47a' : '#844'};color:${ada.soundEnabled ? '#8cf' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Sound ${ada.soundEnabled ? 'ON' : 'OFF'}</button>
       </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;">
@@ -2631,7 +2653,8 @@
       adaAutoJoinQuest(on = true) { ada.autoJoinQuest = !!on; renderHUD(); return ada.autoJoinQuest; },
       adaAutoHeal(on = true) { ada.autoHeal = !!on; renderHUD(); return ada.autoHeal; },
       adaAutoPotion(on = true) { ada.autoPotion = !!on; renderHUD(); return ada.autoPotion; },
-      adaAutoRevive(on = true) { ada.autoRevive = !!on; renderHUD(); return ada.autoRevive; },
+      adaAutoReviveSelf(on = true) { ada.autoReviveSelf = !!on; renderHUD(); return ada.autoReviveSelf; },
+      adaAutoReviveOthers(on = true) { ada.autoReviveOthers = !!on; renderHUD(); return ada.autoReviveOthers; },
       adaBossTokens(on = true) { ada.autoUseBossTokens = !!on; renderHUD(); return ada.autoUseBossTokens; },
       adaQuestTokens(on = true) { ada.autoUseQuestTokens = !!on; renderHUD(); return ada.autoUseQuestTokens; },
       adaBossTokenRange(min = 0, max = 999) { ada.minBossTokenLevel = min; ada.maxBossTokenLevel = max; return { min, max }; },
