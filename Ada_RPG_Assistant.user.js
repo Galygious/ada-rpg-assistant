@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ada RPG Assistant (tchat + automation)
 // @namespace    galydev.twitch.ada
-// @version      33
+// @version      34
 // @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD.
 // @match        https://www.twitch.tv/*
 // @run-at       document-start
@@ -2285,21 +2285,77 @@
       if (ada.transfers != null) charHtml += `<div class="stat-line"><span class="stat-label">Transfers:</span> <span class="stat-value">${ada.transfers}</span></div>`;
       if (ada.stance) charHtml += `<div class="stat-line"><span class="stat-label">Stance:</span> <span class="stat-value">${ada.stance}</span></div>`;
       if (ada.attunement) charHtml += `<div class="stat-line"><span class="stat-label">Attunement:</span> <span class="stat-value">${ada.attunement}</span></div>`;
-      // Equipped gear — two-row format like shop items
-      if (ada.equippedItems && ada.equippedItems.length > 0) {
+      // Equipped gear — show all slots, highlight empty ones
+      {
         charHtml += '<div style="margin-top:4px;border-top:1px solid #303032;padding-top:3px;">';
         charHtml += '<div style="color:#a0a0ff;font-size:10px;font-weight:bold;margin-bottom:2px;">Equipped</div>';
-        for (const itemName of ada.equippedItems) {
+
+        // Map equipped items to slots
+        const slotMap = {}; // slot label -> { itemName, dbItem }
+        let hasTwoHanded = false;
+        for (const itemName of (ada.equippedItems || [])) {
           const dbItem = SHOP_DB[itemName.toLowerCase()];
-          const diceStr = dbItem && dbItem.avgDmg > 0 ? `${dbItem.dice} (avg ${dbItem.avgDmg})` : '';
-          const skillStr = dbItem && dbItem.skill !== 'None' ? `${dbItem.skill} +${dbItem.skillBonus}` : '';
-          const statsLine = [diceStr, skillStr].filter(Boolean).join(' | ');
-          charHtml += `<div class="inv-item">
-            <div class="item-row1"><span class="item-name">${itemName}</span></div>
-            ${dbItem ? `<div class="item-row2">
-              <span class="item-stats"><span class="item-tier">T${dbItem.tier} ${dbItem.slot}</span>${statsLine ? ' · ' + statsLine : ''}</span>
-            </div>` : ''}
-          </div>`;
+          if (dbItem) {
+            if (dbItem.slot === 'TwoHanded') {
+              hasTwoHanded = true;
+              slotMap['Weapon'] = { itemName, dbItem, label: 'Main + Off (2H)' };
+            } else if (dbItem.slot === 'MainHand') {
+              slotMap['Weapon'] = { itemName, dbItem, label: 'Main Hand' };
+            } else if (dbItem.slot === 'OffHand') {
+              slotMap['OffHand'] = { itemName, dbItem, label: 'Off Hand' };
+            } else if (dbItem.slot === 'Armor') {
+              slotMap['Armor'] = { itemName, dbItem, label: 'Armor' };
+            } else if (dbItem.slot === 'AccessoryFace') {
+              slotMap['Face'] = { itemName, dbItem, label: 'Face' };
+            } else if (dbItem.slot === 'AccessoryHat') {
+              slotMap['Hat'] = { itemName, dbItem, label: 'Hat' };
+            } else if (dbItem.slot === 'AccessoryNeck') {
+              slotMap['Neck'] = { itemName, dbItem, label: 'Neck' };
+            }
+          } else {
+            // Unknown item, just show it
+            slotMap['unknown_' + itemName] = { itemName, dbItem: null, label: '?' };
+          }
+        }
+
+        // Define display order
+        const allSlots = [
+          { key: 'Weapon', label: 'Main Hand' },
+          { key: 'OffHand', label: 'Off Hand' },
+          { key: 'Armor', label: 'Armor' },
+          { key: 'Face', label: 'Face' },
+          { key: 'Hat', label: 'Hat' },
+          { key: 'Neck', label: 'Neck' },
+        ];
+
+        for (const slot of allSlots) {
+          const eq = slotMap[slot.key];
+          if (eq) {
+            const label = eq.label || slot.label;
+            const diceStr = eq.dbItem && eq.dbItem.avgDmg > 0 ? `${eq.dbItem.dice} (avg ${eq.dbItem.avgDmg})` : '';
+            const skillStr = eq.dbItem && eq.dbItem.skill !== 'None' ? `${eq.dbItem.skill} +${eq.dbItem.skillBonus}` : '';
+            const statsLine = [diceStr, skillStr].filter(Boolean).join(' | ');
+            charHtml += `<div class="inv-item">
+              <div class="item-row1">
+                <span class="item-name">${eq.itemName}</span>
+                <span style="color:#666;font-size:9px;">${label}</span>
+              </div>
+              ${eq.dbItem ? `<div class="item-row2">
+                <span class="item-stats"><span class="item-tier">T${eq.dbItem.tier}</span>${statsLine ? ' · ' + statsLine : ''}</span>
+              </div>` : ''}
+            </div>`;
+            // If two-handed, skip off hand
+            if (slot.key === 'Weapon' && hasTwoHanded) continue;
+          } else {
+            // Skip off hand if two-handed weapon equipped
+            if (slot.key === 'OffHand' && hasTwoHanded) continue;
+            charHtml += `<div class="inv-item" style="opacity:0.35;">
+              <div class="item-row1">
+                <span class="item-name" style="color:#555;font-style:italic;">Empty</span>
+                <span style="color:#444;font-size:9px;">${slot.label}</span>
+              </div>
+            </div>`;
+          }
         }
         charHtml += '</div>';
       }
