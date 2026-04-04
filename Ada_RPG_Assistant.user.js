@@ -1180,15 +1180,15 @@
     // --- Total party wipe ---
     if (/party has been defeated/i.test(t)) {
       ada.isDead = true;
-      // Record partial boss data if we were tracking
       if (ada.currentBoss && ada.currentBoss.dmgDealt > 0) {
         log(`Boss wipe: ${ada.currentBoss.name} Lvl${ada.currentBoss.level} — Dmg dealt before wipe: ${ada.currentBoss.dmgDealt}`);
         ada.currentBoss = null;
       }
       endQuest();
       playChime('death');
-      if (ada.autoRevive) {
+      if (ada.autoRevive && now() >= ada.reviveCooldownUntil) {
         queueSend('!revive', 'auto-revive self');
+        ada.reviveCooldownUntil = now() + 10000;
       }
       return;
     }
@@ -1207,8 +1207,10 @@
       if (isSelfDeath) {
         playChime('death');
         ada.isDead = true;
-        if (ada.autoRevive) {
+        // Don't auto-revive during combat — wait for quest to end
+        if (ada.autoRevive && !ada.inQuest && now() >= ada.reviveCooldownUntil) {
           queueSend('!revive', 'auto-revive self');
+          ada.reviveCooldownUntil = now() + 10000;
         }
       }
       return;
@@ -1334,7 +1336,7 @@
     // "drinks a potion" - potion used successfully
     if (/drinks? a potion/i.test(t) || /chugs? a potion/i.test(t)) {
       if (ada.potionCount > 0) ada.potionCount--;
-      ada.potionCooldownUntil = now() + 30000; // ~30s assumed cooldown
+      ada.potionCooldownUntil = now() + 10000; // 10s cooldown
     }
 
     // --- Heal cooldown ---
@@ -1432,6 +1434,11 @@
     ada.inQuest = false;
     ada.questJoined = false;
     ada.questStartedAt = null;
+    // If we're dead and combat just ended, now we can revive
+    if (ada.isDead && ada.autoRevive && now() >= ada.reviveCooldownUntil) {
+      queueSend('!revive', 'auto-revive after combat');
+      ada.reviveCooldownUntil = now() + 10000;
+    }
   }
 
   // --- Audio chimes via Web Audio API (no external files) ---
@@ -1715,18 +1722,18 @@
     const target = candidates[0];
     ada.pendingHealTarget = target.name;
     queueSend(`!t ${target.name}`, `auto-heal ${target.name} (${target.hp}/${target.hpMax})`);
-    ada.healCooldownUntil = now() + 10000; // 10s assumed cooldown
+    ada.healCooldownUntil = now() + 90000; // 90s transfer cooldown
   }
 
   function tryAutoPotion() {
-    if (!ada.autoPotion || ada.isDead) return;
+    if (!ada.autoPotion || ada.isDead || ada.inQuest) return;
     if (now() < ada.potionCooldownUntil) return;
     if (ada.hp == null || ada.hpMax == null) return;
     if (ada.hp / ada.hpMax > ada.autoPotionThreshold) return;
     if (ada.potionCount <= 0) return;
 
     queueSend('!heal', `auto-potion (${ada.hp}/${ada.hpMax})`);
-    ada.potionCooldownUntil = now() + 30000;
+    ada.potionCooldownUntil = now() + 10000; // 10s cooldown
   }
 
   function getBestToken() {
