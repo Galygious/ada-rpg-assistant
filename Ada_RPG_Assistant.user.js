@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ada RPG Assistant (tchat + automation)
 // @namespace    galydev.twitch.ada
-// @version      37
+// @version      38
 // @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD.
 // @match        https://www.twitch.tv/*
 // @run-at       document-start
@@ -890,10 +890,13 @@
     // token auto-use config — which token types & min levels to auto-use
     autoUseBossTokens: true,
     autoUseQuestTokens: false,
-    minBossTokenLevel: 0,   // 0 = use any boss token (highest first)
+    minBossTokenLevel: 0,   // hard filter: only tokens with level in [min, max]
     maxBossTokenLevel: 999,
     minQuestTokenLevel: 0,
     maxQuestTokenLevel: 999,
+    /** Among valid tokens, pick level closest to this (tie-break: higher level) */
+    preferredBossTokenLevel: 30,
+    preferredQuestTokenLevel: 30,
 
     // boss combat tracking (current fight)
     currentBoss: null,       // { name, level, dmgDealt, startedAt }
@@ -946,6 +949,8 @@
         maxBossTokenLevel: ada.maxBossTokenLevel,
         minQuestTokenLevel: ada.minQuestTokenLevel,
         maxQuestTokenLevel: ada.maxQuestTokenLevel,
+        preferredBossTokenLevel: ada.preferredBossTokenLevel,
+        preferredQuestTokenLevel: ada.preferredQuestTokenLevel,
         bossHPData: ada.bossHPData,
         savedAt: Date.now(),
       };
@@ -987,6 +992,8 @@
       if (s.maxBossTokenLevel != null) ada.maxBossTokenLevel = s.maxBossTokenLevel;
       if (s.minQuestTokenLevel != null) ada.minQuestTokenLevel = s.minQuestTokenLevel;
       if (s.maxQuestTokenLevel != null) ada.maxQuestTokenLevel = s.maxQuestTokenLevel;
+      if (s.preferredBossTokenLevel != null) ada.preferredBossTokenLevel = s.preferredBossTokenLevel;
+      if (s.preferredQuestTokenLevel != null) ada.preferredQuestTokenLevel = s.preferredQuestTokenLevel;
       if (s.bossHPData) ada.bossHPData = s.bossHPData;
       log('Loaded ada game state from localStorage');
     } catch (e) { warn('Failed to load ada state:', e); }
@@ -1088,6 +1095,7 @@
     }
 
     // --- Quest announcement: "A quest is available" = no one started yet ---
+    // Priority: (1) boss tokens if enabled + any in range, (2) quest tokens, (3) plain !quest last
     if (tl.includes('a quest is available')) {
       if (!ada.questJoined && ada.autoStartQuest) {
         ada.questJoined = true;
@@ -1095,7 +1103,7 @@
         if (tokenToUse) {
           queueSend(`!use ${tokenToUse}`, `auto-start quest via token: ${tokenToUse}`);
         } else {
-          queueSend('!quest', 'auto-start quest');
+          queueSend('!quest', 'auto-start quest (no eligible token)');
         }
       }
       return;
@@ -1192,9 +1200,8 @@
       }
       endQuest();
       playChime('death');
-      if (ada.autoReviveSelf && now() >= ada.reviveCooldownUntil) {
+      if (ada.autoReviveSelf) {
         queueSend('!revive', 'auto-revive self');
-        ada.reviveCooldownUntil = now() + 10000;
       }
       return;
     }
@@ -1214,9 +1221,8 @@
         playChime('death');
         ada.isDead = true;
         // Don't auto-revive during combat — wait for quest to end
-        if (ada.autoReviveSelf && !ada.inQuest && now() >= ada.reviveCooldownUntil) {
+        if (ada.autoReviveSelf && !ada.inQuest) {
           queueSend('!revive', 'auto-revive self');
-          ada.reviveCooldownUntil = now() + 10000;
         }
       }
       return;
@@ -1520,9 +1526,8 @@
     ada.questJoined = false;
     ada.questStartedAt = null;
     // If we're dead and combat just ended, now we can revive
-    if (ada.isDead && ada.autoReviveSelf && now() >= ada.reviveCooldownUntil) {
+    if (ada.isDead && ada.autoReviveSelf) {
       queueSend('!revive', 'auto-revive self after combat');
-      ada.reviveCooldownUntil = now() + 10000;
     }
   }
 
@@ -1730,6 +1735,60 @@
   let queueTimerStarted = false;
   const recentlySent = {};    // msg -> timestamp, prevents re-queueing within cooldown
   const DEDUP_WINDOW_MS = 10000; // 10s dedup window for same command
+  /** Min time between revive spell casts (game cooldown), tracked from last successful send */
+  const REVIVE_COMMAND_GAP_MS = 10000;
+
+  /**
+   * Per-command gates before sending.
+   * defer = time/cooldown only (wait, keep position).
+   * drop = not possible for non-time reasons (remove from queue).
+   */
+  function validateQueueItem(item) {
+    const raw = String(item.msg || '').trim();
+    const reviveOther = /^!revive\s+(\S+)/i.exec(raw);
+    if (reviveOther) {
+      const name = reviveOther[1].toLowerCase();
+      if (now() < ada.reviveCooldownUntil) return { action: 'defer', why: 'revive_cd' };
+      const pdata = ada.injuredParty[name];
+      if (pdata && pdata.hp > 0) return { action: 'drop', why: 'target_alive' };
+      return { action: 'send' };
+    }
+    if (/^!revive$/i.test(raw)) {
+      if (now() < ada.reviveCooldownUntil) return { action: 'defer', why: 'revive_cd' };
+      if (!ada.isDead) return { action: 'drop', why: 'not_dead' };
+      if (ada.inQuest) return { action: 'drop', why: 'in_combat' };
+      return { action: 'send' };
+    }
+    if (/^!t\s+/i.test(raw)) {
+      if (now() < ada.healCooldownUntil) return { action: 'defer', why: 'heal_cd' };
+      if (ada.isDead) return { action: 'drop', why: 'you_are_dead' };
+      const tm = /^!t\s+(\S+)/i.exec(raw);
+      if (tm) {
+        const n = tm[1].toLowerCase();
+        const pd = ada.injuredParty[n];
+        if (pd) {
+          if (pd.hp <= 0) return { action: 'drop', why: 'target_dead' };
+          if (pd.hp >= pd.hpMax) return { action: 'drop', why: 'target_full_hp' };
+        }
+      }
+      return { action: 'send' };
+    }
+    if (/^!heal$/i.test(raw)) {
+      if (now() < ada.potionCooldownUntil) return { action: 'defer', why: 'potion_cd' };
+      if (ada.isDead) return { action: 'drop', why: 'dead' };
+      if (ada.potionCount <= 0) return { action: 'drop', why: 'no_potions' };
+      if (ada.hp != null && ada.hpMax != null && ada.hp >= ada.hpMax) return { action: 'drop', why: 'full_hp' };
+      return { action: 'send' };
+    }
+    return { action: 'send' };
+  }
+
+  function applyPostSendCooldowns(msg) {
+    const raw = String(msg || '').trim();
+    if (/^!revive(\s|$)/i.test(raw)) ada.reviveCooldownUntil = now() + REVIVE_COMMAND_GAP_MS;
+    if (/^!t\s+/i.test(raw)) ada.healCooldownUntil = now() + 90000;
+    if (/^!heal$/i.test(raw)) ada.potionCooldownUntil = now() + 30000;
+  }
 
   function isTchatReady() {
     return !!(state.sendHash && state.sendVarsTemplate);
@@ -1767,20 +1826,43 @@
     if (sendQueue.length === 0) return;
     if (!isTchatReady()) return;
 
-    // Pop from front (FIFO)
-    const item = sendQueue.shift();
-    log(`Sending: "${item.msg}" (${item.reason})`);
-    addChatLog('>>SELF<<', `${item.msg} [${item.reason}]`);
-    recentlySent[item.msg] = now();
-
-    const result = await tSend(item.msg);
-    if (!result.ok && result.reason === 'cooldown') {
-      sendQueue.unshift(item);
-    } else if (!result.ok) {
-      warn(`Send failed [${result.reason}]:`, result);
+    let sendIndex = -1;
+    for (let i = 0; i < sendQueue.length; ) {
+      const v = validateQueueItem(sendQueue[i]);
+      if (v.action === 'drop') {
+        const dropped = sendQueue.splice(i, 1)[0];
+        log(`Queue drop "${dropped.msg}" (${v.why || 'validator'})`);
+        continue;
+      }
+      if (v.action === 'defer') {
+        i++;
+        continue;
+      }
+      sendIndex = i;
+      break;
     }
 
-    renderHUD(); // update queue count display
+    if (sendIndex < 0) {
+      renderHUD();
+      return;
+    }
+
+    const toSend = sendQueue.splice(sendIndex, 1)[0];
+
+    log(`Sending: "${toSend.msg}" (${toSend.reason})`);
+    addChatLog('>>SELF<<', `${toSend.msg} [${toSend.reason}]`);
+    recentlySent[toSend.msg] = now();
+
+    const result = await tSend(toSend.msg);
+    if (!result.ok && result.reason === 'cooldown') {
+      sendQueue.splice(sendIndex, 0, toSend);
+    } else if (!result.ok) {
+      warn(`Send failed [${result.reason}]:`, result);
+    } else {
+      applyPostSendCooldowns(toSend.msg);
+    }
+
+    renderHUD();
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -1807,12 +1889,10 @@
     const target = candidates[0];
     ada.pendingHealTarget = target.name;
     queueSend(`!t ${target.name}`, `auto-heal ${target.name} (${target.hp}/${target.hpMax})`);
-    ada.healCooldownUntil = now() + 90000; // 90s transfer cooldown
   }
 
   function tryAutoReviveOthers() {
     if (!ada.autoReviveOthers || ada.isDead || ada.inQuest) return;
-    if (now() < ada.reviveCooldownUntil) return;
 
     const selfName = ada.playerName ? ada.playerName.toLowerCase() : null;
     for (const [name, data] of Object.entries(ada.injuredParty)) {
@@ -1820,8 +1900,6 @@
       if (name === selfName) continue;
       if (data.hp <= 0) {
         queueSend(`!revive ${name}`, `auto-revive ${name}`);
-        ada.reviveCooldownUntil = now() + 10000;
-        return; // one at a time
       }
     }
   }
@@ -1834,36 +1912,49 @@
     if (ada.potionCount <= 0) return;
 
     queueSend('!heal', `auto-potion (${ada.hp}/${ada.hpMax})`);
-    ada.potionCooldownUntil = now() + 30000; // 30s cooldown
   }
 
-  function getBestToken() {
-    // Find highest-level token in inventory that matches config
+  /**
+   * Best token in one category: levels must fall in [min,max]; among those, minimize
+   * distance to preferred level, then prefer higher level on ties.
+   */
+  function pickBestTokenInCategory(kind) {
+    const isBoss = kind === 'boss';
+    if (isBoss && !ada.autoUseBossTokens) return null;
+    if (!isBoss && !ada.autoUseQuestTokens) return null;
+
+    const re = isBoss ? /Boss Token Lvl(\d+)/i : /Quest Token Lvl(\d+)/i;
+    const min = isBoss ? ada.minBossTokenLevel : ada.minQuestTokenLevel;
+    const max = isBoss ? ada.maxBossTokenLevel : ada.maxQuestTokenLevel;
+    const pref = isBoss ? ada.preferredBossTokenLevel : ada.preferredQuestTokenLevel;
+
     let bestName = null;
-    let bestLevel = -1;
+    let bestDist = Infinity;
+    let bestLvl = -1;
 
     for (const [name, count] of Object.entries(ada.inventory)) {
       if (count <= 0) continue;
-
-      const bossM = /Boss Token Lvl(\d+)/i.exec(name);
-      if (bossM && ada.autoUseBossTokens) {
-        const lvl = parseInt(bossM[1]);
-        if (lvl >= ada.minBossTokenLevel && lvl <= ada.maxBossTokenLevel && lvl > bestLevel) {
-          bestLevel = lvl;
-          bestName = name;
-        }
-      }
-
-      const questM = /Quest Token Lvl(\d+)/i.exec(name);
-      if (questM && ada.autoUseQuestTokens) {
-        const lvl = parseInt(questM[1]);
-        if (lvl >= ada.minQuestTokenLevel && lvl <= ada.maxQuestTokenLevel && lvl > bestLevel) {
-          bestLevel = lvl;
-          bestName = name;
-        }
+      const m = re.exec(name);
+      if (!m) continue;
+      const lvl = parseInt(m[1], 10);
+      if (lvl < min || lvl > max) continue;
+      const dist = Math.abs(lvl - pref);
+      if (bestName == null || dist < bestDist || (dist === bestDist && lvl > bestLvl)) {
+        bestDist = dist;
+        bestLvl = lvl;
+        bestName = name;
       }
     }
     return bestName;
+  }
+
+  /**
+   * Token for auto-start when "a quest is available": boss first, then quest, else null (caller uses !quest).
+   */
+  function getBestToken() {
+    const boss = pickBestTokenInCategory('boss');
+    if (boss) return boss;
+    return pickBestTokenInCategory('quest');
   }
 
   function consumeInventoryItem(name) {
@@ -2265,6 +2356,10 @@
         <button class="ada-toggle" data-toggle="autoUseBossTokens" style="background:${ada.autoUseBossTokens ? '#2a3a5a' : '#3a2020'};border:1px solid ${ada.autoUseBossTokens ? '#47a' : '#844'};color:${ada.autoUseBossTokens ? '#8cf' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Boss Tkn ${ada.autoUseBossTokens ? 'ON' : 'OFF'}</button>
         <button class="ada-toggle" data-toggle="autoUseQuestTokens" style="background:${ada.autoUseQuestTokens ? '#2a3a5a' : '#3a2020'};border:1px solid ${ada.autoUseQuestTokens ? '#47a' : '#844'};color:${ada.autoUseQuestTokens ? '#8cf' : '#f88'};border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px;">Quest Tkn ${ada.autoUseQuestTokens ? 'ON' : 'OFF'}</button>
       </div>
+      <div style="font-size:9px;color:#777;margin-top:2px;line-height:1.3;" title="Auto-start: boss tokens first (if ON + in inv), then quest tokens, then !quest. Pick uses level closest to preferred within min–max. Console: adaBossTokenRange, adaQuestTokenRange, adaPreferredTokenLevels">
+        Tokens: boss Lv ${ada.minBossTokenLevel}–${ada.maxBossTokenLevel} → pref ${ada.preferredBossTokenLevel}
+        &nbsp;|&nbsp; quest Lv ${ada.minQuestTokenLevel}–${ada.maxQuestTokenLevel} → pref ${ada.preferredQuestTokenLevel}
+      </div>
       <div style="font-size:10px;color:#666;margin-top:2px;">Queue: ${sendQueue.length}</div>
     `, [{ label: '\u25C0 Hide', action: () => toggleAdaPanelCollapse() }]);
     statusPanel.querySelectorAll('.ada-toggle').forEach(btn => {
@@ -2592,6 +2687,7 @@
     }
     const shopPanel = makePanel('Shop', shopHtml, [
       { label: 'Refresh', action: () => { ada.awaitingShop = true; queueSend('!ada shop', 'manual shop check'); } },
+      { label: 'Confirm', action: () => { queueSend('!ada shop confirm', 'manual shop confirm'); } },
     ]);
     shopPanel.querySelectorAll('.btn-buy').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -2796,8 +2892,15 @@
       adaAutoReviveOthers(on = true) { ada.autoReviveOthers = !!on; renderHUD(); return ada.autoReviveOthers; },
       adaBossTokens(on = true) { ada.autoUseBossTokens = !!on; renderHUD(); return ada.autoUseBossTokens; },
       adaQuestTokens(on = true) { ada.autoUseQuestTokens = !!on; renderHUD(); return ada.autoUseQuestTokens; },
-      adaBossTokenRange(min = 0, max = 999) { ada.minBossTokenLevel = min; ada.maxBossTokenLevel = max; return { min, max }; },
-      adaQuestTokenRange(min = 0, max = 999) { ada.minQuestTokenLevel = min; ada.maxQuestTokenLevel = max; return { min, max }; },
+      adaBossTokenRange(min = 0, max = 999) { ada.minBossTokenLevel = min; ada.maxBossTokenLevel = max; saveAdaState(); renderHUD(); return { min, max }; },
+      adaQuestTokenRange(min = 0, max = 999) { ada.minQuestTokenLevel = min; ada.maxQuestTokenLevel = max; saveAdaState(); renderHUD(); return { min, max }; },
+      adaPreferredTokenLevels(boss = 30, quest = 30) {
+        ada.preferredBossTokenLevel = Number(boss) || 0;
+        ada.preferredQuestTokenLevel = Number(quest) || 0;
+        saveAdaState();
+        renderHUD();
+        return { boss: ada.preferredBossTokenLevel, quest: ada.preferredQuestTokenLevel };
+      },
       adaBossHP: () => ada.bossHPData,
       adaBossHPClear: () => { ada.bossHPData = {}; saveAdaState(); return 'Boss HP data cleared'; },
       adaPotionThreshold(pct = 0.7) { ada.autoPotionThreshold = Math.max(0, Math.min(1, Number(pct) || 0.7)); return ada.autoPotionThreshold; },
