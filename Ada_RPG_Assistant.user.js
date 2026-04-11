@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Ada RPG Assistant (tchat + automation)
 // @namespace    galydev.twitch.ada
-// @version      38
-// @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD.
+// @version      39
+// @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD. Per-channel save state with SPA navigation detection.
 // @match        https://www.twitch.tv/*
 // @run-at       document-start
 // @grant        unsafeWindow
@@ -27,6 +27,7 @@
     debug: false,
     sendHash: null,
     channelID: null,
+    currentChannelName: null,  // URL-derived channel name (e.g. "norgothgaming")
     sendVarsTemplate: null,
     sendOpName: 'sendChatMessage',
     capturedHeaders: {},
@@ -37,6 +38,13 @@
   };
 
   const now = () => Date.now();
+
+  function getCurrentChannelName() {
+    try {
+      const m = window.location.pathname.match(/^\/([a-zA-Z0-9_]{1,25})/);
+      return m ? m[1].toLowerCase() : null;
+    } catch (_) { return null; }
+  }
 
   function safeJsonParse(s) {
     try { return JSON.parse(s); } catch (_) { return null; }
@@ -321,6 +329,14 @@
         return _send.apply(this, arguments);
       };
       post('patched', { which: 'xhr' });
+      // --- SPA navigation detection ---
+      (function() {
+        const _push = history.pushState.bind(history);
+        const _replace = history.replaceState.bind(history);
+        history.pushState = function() { const r = _push.apply(this, arguments); post('navigate', { path: location.pathname }); return r; };
+        history.replaceState = function() { const r = _replace.apply(this, arguments); post('navigate', { path: location.pathname }); return r; };
+        window.addEventListener('popstate', () => post('navigate', { path: location.pathname }));
+      })();
     })();`;
     const s = document.createElement('script');
     s.textContent = src;
@@ -340,6 +356,15 @@
     }
     if (msg.type === 'opSeen') {
       if (state.debug && msg.data?.op) log('saw op:', msg.data.op);
+      return;
+    }
+    if (msg.type === 'navigate') {
+      const path = msg.data?.path || '';
+      const m = path.match(/^\/([a-zA-Z0-9_]{1,25})/);
+      const newChannel = m ? m[1].toLowerCase() : null;
+      if (newChannel && newChannel !== state.currentChannelName) {
+        handleChannelChange(newChannel);
+      }
       return;
     }
     if (msg.type === 'captured') {
@@ -455,6 +480,7 @@
       hasSendHash: !!state.sendHash,
       sendHashValue: state.sendHash,
       channelID: state.channelID,
+      currentChannelName: state.currentChannelName,
       hasSendVarsTemplate: !!state.sendVarsTemplate,
       sendOpName: state.sendOpName,
       capturedHeaders: { ...state.capturedHeaders },
@@ -914,8 +940,13 @@
     pendingBuyConfirm: false,
   };
 
-  // --- Persist ada game state across sessions ---
-  const ADA_STATE_KEY = 'ada_game_state_v1';
+  // --- Persist ada game state across sessions (per-channel) ---
+  const ADA_STATE_KEY = 'ada_game_state_v1'; // legacy fallback key
+
+  function getAdaStateKey(channel) {
+    const ch = channel !== undefined ? channel : state.currentChannelName;
+    return ch ? `ada_game_state_v2_${ch}` : ADA_STATE_KEY;
+  }
 
   function saveAdaState() {
     try {
@@ -954,13 +985,15 @@
         bossHPData: ada.bossHPData,
         savedAt: Date.now(),
       };
-      localStorage.setItem(ADA_STATE_KEY, JSON.stringify(persist));
+      localStorage.setItem(getAdaStateKey(), JSON.stringify(persist));
     } catch (_) {}
   }
 
-  function loadAdaState() {
+  function loadAdaState(channel) {
     try {
-      const raw = localStorage.getItem(ADA_STATE_KEY);
+      const key = getAdaStateKey(channel);
+      // Fall back to old single-key save for first-time migration
+      const raw = localStorage.getItem(key) || (key !== ADA_STATE_KEY ? localStorage.getItem(ADA_STATE_KEY) : null);
       if (!raw) return;
       const s = JSON.parse(raw);
       if (s.playerName) ada.playerName = s.playerName;
@@ -1005,7 +1038,15 @@
 
   const QUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
+  let activeChatObserver = null;
+
   function startChatObserver() {
+    // Disconnect previous observer if any (handles channel-switch re-init)
+    if (activeChatObserver) {
+      activeChatObserver.disconnect();
+      activeChatObserver = null;
+    }
+
     const chatContainer = document.querySelector('[class*="chat-scrollable-area"]') ||
                           document.querySelector('.chat-list--default') ||
                           document.querySelector('[data-a-target="chat-scroller"]');
@@ -1024,6 +1065,7 @@
 
     const target = chatContainer || document.body;
     observer.observe(target, { childList: true, subtree: true });
+    activeChatObserver = observer;
     log('Chat observer started on', target.tagName);
   }
 
@@ -2337,7 +2379,7 @@
       </div>
       <div>
         <span class="status-dot ${state.channelID ? 'status-green' : 'status-red'}"></span>
-        Channel: ${state.channelID || 'detecting...'}
+        Channel: ${state.currentChannelName ? `${state.currentChannelName}` : ''}${state.channelID ? ` (${state.channelID})` : ' detecting...'}
       </div>
       <div>
         <span class="status-dot ${ada.inQuest ? 'status-yellow' : 'status-green'}"></span>
@@ -2862,6 +2904,87 @@
   // ║  SECTION 9: Console API + Boot                                 ║
   // ╚══════════════════════════════════════════════════════════════════╝
 
+  function handleChannelChange(newChannel) {
+    if (!newChannel || newChannel === state.currentChannelName) return;
+    const oldChannel = state.currentChannelName;
+    log(`Channel changed: ${oldChannel || '(none)'} → ${newChannel}`);
+
+    // Save current channel's state before switching
+    if (oldChannel) {
+      saveAdaState();
+      saveStateToLS();
+    }
+
+    // Update channel tracking
+    state.currentChannelName = newChannel;
+
+    // Reset channel-specific tchat state (will be recaptured from next GQL traffic)
+    state.channelID = null;
+    state.sendVarsTemplate = null;
+    // Keep: sendHash, capturedHeaders, sendOpName — these are auth/protocol level, not channel-specific
+
+    // Reset volatile ada state (quest, combat, pending actions, cooldowns)
+    ada.inQuest = false;
+    ada.questJoined = false;
+    ada.questStartedAt = null;
+    ada.isDead = false;
+    ada.injuredParty = {};
+    ada.currentBoss = null;
+    ada.pendingHealTarget = null;
+    ada.awaitingShop = false;
+    ada.awaitingInv = false;
+    ada.awaitingChar = false;
+    ada.awaitingGold = false;
+    ada.awaitingWho = false;
+    ada.pendingBuyConfirm = false;
+    ada.shopItems = [];
+    ada.shopExpiresAt = null;
+    ada.healCooldownUntil = 0;
+    ada.potionCooldownUntil = 0;
+    ada.reviveCooldownUntil = 0;
+
+    // Reset character data — will be populated from the new channel's save or live bot responses
+    ada.playerName = null;
+    ada.level = null;
+    ada.playerClass = null;
+    ada.xp = null;
+    ada.xpMax = null;
+    ada.hp = null;
+    ada.hpMax = null;
+    ada.gold = null;
+    ada.plat = null;
+    ada.transfers = null;
+    ada.stance = null;
+    ada.attunement = null;
+    ada.equippedItems = [];
+    ada.equipped = {};
+    ada.inventory = {};
+    ada.potionCount = 0;
+    ada.bossHPData = {};
+
+    // Load the new channel's saved ada state (sendHash/headers stay live in memory)
+    loadAdaState(newChannel);
+
+    // Re-detect player name on the new channel
+    detectPlayerName();
+
+    // Re-attach chat observer once the new channel's chat DOM is ready
+    const waitForNewChat = () => {
+      const chatArea = document.querySelector('[class*="chat-scrollable-area"]') ||
+                       document.querySelector('.chat-list--default') ||
+                       document.querySelector('[data-a-target="chat-scroller"]');
+      if (chatArea) {
+        startChatObserver();
+        log('Chat observer restarted for channel:', newChannel);
+      } else {
+        setTimeout(waitForNewChat, 1000);
+      }
+    };
+    setTimeout(waitForNewChat, 1500);
+
+    renderHUD();
+  }
+
   function expose() {
     const api = {
       // tchat
@@ -2873,6 +2996,7 @@
       tResetCaptured() {
         state.sendHash = null;
         state.channelID = null;
+        state.currentChannelName = getCurrentChannelName();
         state.sendVarsTemplate = null;
         state.sendOpName = 'sendChatMessage';
         state.capturedHeaders = {};
@@ -2985,9 +3109,13 @@
   });
 
   async function boot() {
+    // Establish current channel name from URL before loading any saved state
+    state.currentChannelName = getCurrentChannelName();
+    log('Boot on channel:', state.currentChannelName || '(unknown)');
+
     await initChatLogDB();
     loadStateFromLS();
-    loadAdaState();
+    loadAdaState(state.currentChannelName);
     detectPlayerName();
     injectPageSniffer();
     expose();
