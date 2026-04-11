@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ada RPG Assistant (tchat + automation)
 // @namespace    galydev.twitch.ada
-// @version      39
+// @version      40
 // @description  Twitch GQL chat sniffer/sender + Ada RPG bot automation overlay. Auto-quest, auto-heal, auto-potion, auto-revive, inventory/shop/economy tracking with full HUD. Per-channel save state with SPA navigation detection.
 // @match        https://www.twitch.tv/*
 // @run-at       document-start
@@ -167,7 +167,7 @@
     try {
       const payload = {
         sendHash: state.sendHash,
-        channelID: state.channelID,
+        // channelID intentionally NOT saved — it is channel-specific and captured fresh from GQL on every load
         sendVarsTemplate: state.sendVarsTemplate,
         sendOpName: state.sendOpName,
         capturedHeaders: state.capturedHeaders,
@@ -184,7 +184,7 @@
       if (!raw) return false;
       const j = JSON.parse(raw);
       if (j.sendHash) state.sendHash = j.sendHash;
-      if (j.channelID) state.channelID = j.channelID;
+      // j.channelID is intentionally ignored — always captured fresh from GQL traffic
       if (j.sendVarsTemplate) state.sendVarsTemplate = j.sendVarsTemplate;
       if (j.sendOpName) state.sendOpName = j.sendOpName;
       if (j.capturedHeaders) state.capturedHeaders = j.capturedHeaders;
