@@ -2729,7 +2729,7 @@
     }
     const shopPanel = makePanel('Shop', shopHtml, [
       { label: 'Refresh', action: () => { ada.awaitingShop = true; queueSend('!ada shop', 'manual shop check'); } },
-      { label: 'Confirm', action: () => { queueSend('!ada shop confirm', 'manual shop confirm'); } },
+      { label: 'Confirm', action: () => { queueSend('!ada buy confirm', 'manual buy confirm'); } },
     ]);
     shopPanel.querySelectorAll('.btn-buy').forEach(btn => {
       btn.addEventListener('click', () => {
